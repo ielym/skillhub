@@ -1,0 +1,20 @@
+# 社区 / 第三方 skills：由 skill-sync/references/external-skills.json 声明，按需安装，不进 git
+external_skills/
+
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+.env
+.env.*
+*.env
+credentials.json
+token.json
+
+*.log
+.DS_Store
+Thumbs.db
+*.bak-*
+*.zip

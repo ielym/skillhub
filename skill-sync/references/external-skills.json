@@ -1,0 +1,11 @@
+{
+  "skills": [
+    {
+      "name": "feishu-docs",
+      "source": "clawdbot",
+      "id": "stevenlikewatermelon/feishu-docs",
+      "version": "1.1.1",
+      "note": "飞书新版云文档（docx）全生命周期：创建/读取/更新/删除、Markdown/HTML 转块、块级操作、权限管理、搜索与文件夹浏览"
+    }
+  ]
+}
