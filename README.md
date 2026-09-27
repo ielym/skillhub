@@ -21,15 +21,15 @@
 ## 换一台机器
 
 ```bash
+npm i -g @ielym/skill-sync        # 装 CLI（全局命令，任一终端可用）
 git clone https://github.com/ielym/skillhub <本地目录>
-cd <本地目录>
-skill-sync ext install          # 按清单装外部 skills（需 clawdbot / skillhub CLI）
-skill-sync link --dir <本地目录>
+skill-sync init <本地目录>          # 记录源仓库位置
+skill-sync ext install            # 按清单装外部 skills（git/url 直连，无需其它 CLI，装完自动 link）
 ```
 
 ## 约定
 
 - git 仓库、忽略规则、打包分发等在本层统一处理；各 skill 目录内不单独放 README 和 git 配置。
 - 安装、多端同步统一由 `skill-sync/` 负责；其余 skill 只承担使用功能，一般不承担安装。
-- 新增外部 skill：`skill-sync ext add <名字> --source clawdbot --id <作者/名字>`，再 `ext install`。
+- 新增外部 skill：`skill-sync ext add <名字> --source git|url --url <仓库/下载地址>`，再 `ext install`。
 
