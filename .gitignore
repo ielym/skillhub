@@ -1,4 +1,4 @@
-# 社区 / 第三方 skills：由 skill-sync/references/external-skills.json 声明，按需安装，不进 git
+# 社区 / 第三方 skills：手动安装（参考 skill-sync/references/external-skills.md），不进 git
 external_skills/
 
 node_modules/

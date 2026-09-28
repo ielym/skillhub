@@ -1,6 +1,6 @@
 ---
 name: skill-sync
-description: 用 skill-sync 命令统一安装与同步本机所有 AI 工具的 skills，管理自建 skill 与外部 skill（按 external-skills.json 清单从 git/url 安装到 external_skills 并软连接）。当用户要安装/更新/推送 skill、查看链接状态、建立或解除链接、一键同步所有 skill 到最新时使用。
+description: 用 skill-sync 命令统一安装与同步本机所有 AI 工具的 skills，基于自有 git 仓库管理自建 skill，并把手动安装到 external_skills/ 的外部 skill 一并软连接。当用户要安装/更新/推送 skill、查看链接状态、建立或解除链接、一键同步所有 skill 到最新时使用。
 version: 1.0.0
 ---
 
@@ -29,7 +29,7 @@ cd <cli 源码目录> && git pull && npm i -g .
 npm uninstall -g @ielym/skill-sync   # 卸载
 ```
 
-> npm 全局命令在你的 PATH 里，任一终端都能直接跑 `skill-sync`；不同 AI 工具无需任何额外配置，按命令名调用即可。
+> npm 全局命令在 PATH 里，任一终端都能直接跑 `skill-sync`；不同 AI 工具无需任何额外配置，按命令名调用即可。
 > 源码目录位置自己定；改源码后重跑 `npm i -g .` 即生效。
 
 ## 源仓库（Skill 原始目录）位置
@@ -51,57 +51,41 @@ skill-sync link --dir <目录>   # 或临时指定
 
 ## 两类 skill
 
-| <br /> | 自建               | 外部（社区 / 第三方）                          |
-| ------ | ---------------- | ------------------------------------- |
-| 存放     | 仓库根目录（本层直接子目录）   | `external_skills/`（gitignore，不进 git）  |
-| 声明     | 目录即声明            | 登记在 `references/external-skills.json` |
-| 更新     | `git pull` / `git push` | 按来源 `git pull` 或重新下载替换            |
+| <br /> | 自建                      | 外部（社区 / 第三方）                                        |
+| ------ | ----------------------- | ------------------------------------------------------ |
+| 存放     | 仓库根目录（本层直接子目录）          | `external_skills/`（gitignore，不进 git）                      |
+| 声明     | 目录即声明                   | 手动安装（目录即声明）                                              |
+| 安装/更新  | `git pull` / `git push` | 手动下载 / `git pull`，见 [`references/external-skills.md`](./references/external-skills.md) |
+| 分发     | `link` 软连接到各 AI 工具      | 同左（安装后与自建 skill 一起 link）                                 |
+
+> 外部 skill 手动安装；[`references/external-skills.md`](./references/external-skills.md) 记录了已知外部 skill 的来源与安装方法，按需选用。
 
 ## 命令
 
 ### 源仓库
 
-| 命令                        | 用途                                  |
-| ------------------------- | ----------------------------------- |
-| `skill-sync init <目录>`     | 记录源仓库路径（写入 `~/.skill-sync.json`）   |
-| `skill-sync status`       | 查看各 AI 工具的自建 + 外部 skill 链接状态      |
-| `skill-sync link [--force]` | 把自建 skill 与 `external_skills/` 软连接到所有已安装工具 |
-| `skill-sync unlink <tool>` | 解除某工具的链接（只删链接，不动源）                  |
+| 命令                          | 用途                                         |
+| --------------------------- | ------------------------------------------ |
+| `skill-sync init <目录>`      | 记录源仓库路径（写入 `~/.skill-sync.json`）           |
+| `skill-sync status`         | 查看各 AI 工具的 skill（自建 + 外部）链接状态               |
+| `skill-sync link [--force]` | 把自建 skill 与 `external_skills/` 下的外部 skill 软连接到所有已安装工具 |
+| `skill-sync unlink <tool>`  | 解除某工具的链接（只删链接，不动源）                         |
 
 ### 同步 / 推送
 
-| 命令                      | 用途                                            |
-| ----------------------- | --------------------------------------------- |
-| `skill-sync update [--force]` | **一键同步**：`git pull` 自建 + 更新外部 skill + 重新链接所有工具。命令外最推荐用这个 |
-| `skill-sync pull`       | 仅拉取自建 skill（`git pull --rebase --autostash`）   |
-| `skill-sync push ["说明"]` | 提交并推送自建 skill（`git add -A && commit && push`）  |
-| `skill-sync install <名字> --source git|url --url <地址>` | 登记并安装一个外部 skill（等价于 ext add + ext install + link） |
+| 命令                          | 用途                                          |
+| --------------------------- | ------------------------------------------- |
+| `skill-sync update [--force]` | **一键同步**：`git pull` 自建 skill + 重新链接所有工具。命令外最推荐用这个 |
+| `skill-sync pull`           | 仅拉取自建 skill（`git pull --rebase --autostash`） |
+| `skill-sync push ["说明"]`    | 提交并推送自建 skill（`git add -A && commit && push`）  |
 
-### 外部 skill
+## 外部 skill（手动安装）
 
-| 命令                                               | 用途                                          |
-| ------------------------------------------------ | ------------------------------------------- |
-| `skill-sync ext list`                            | 查看清单与安装状态                                   |
-| `skill-sync ext add <名字> --source git|url --url <地址> [--version v]` | 登记一个外部 skill                                |
-| `skill-sync ext install [名字]`                    | 安装到 `external_skills/<名字>`；已装则更新；装完自动 link |
+流程：
 
-## 外部 skill 清单
-
-清单文件：[`references/external-skills.json`](./references/external-skills.json)。每条字段：
-
-- 必填 `name`（目录名）、`source`（来源类型）、`url`。
-- `source` 支持两种，都是 CLI 直连、不依赖任何其它 CLI：
-  - `git`：`clone <url>` 首次安装，已装则 `git pull` 更新。
-  - `url`：下载一个 zip/tar 到临时目录解压后替换；更新即重新下载替换，并自动保留旧目录里的 `.env` / `.env.*` 密钥文件。
-- `version` / `note` 为可选说明，`git` 来源安装后可用 `version` 指定 checkout。
-
-用 `skill-sync ext add …`（或 `install`）登记，也可直接编辑 JSON。
-
-## 安装外部 skill 流程
-
-1. 登记：`skill-sync ext add feishu-docs --source url --url https://…/download?slug=feishu-docs`
-2. 安装：`skill-sync ext install` → 落到 `external_skills/<名字>`（已装则更新）
-3. 分发：自动执行 `link` → 软连接到各 AI 工具
+1. 查 [`references/external-skills.md`](./references/external-skills.md) 选一个，按其中的说明手动安装（下载解压 / `git clone`）到 `external_skills/<名字>`
+2. 分发：`skill-sync link` → 软连接到各 AI 工具
+3. 更新 / 卸载：手动重新下载替换 / 删除目录，再重新 `link`
 
 ## 支持的 AI 工具及 skills 目录
 
@@ -115,14 +99,14 @@ skill-sync link --dir <目录>   # 或临时指定
 | Gemini CLI  | `~/.gemini/skills`             |
 | Antigravity | `~/.gemini/antigravity/skills` |
 | QoderWork   | `~/.qoderwork/skills`          |
+| Trae        | `~/.trae-cn/builtin/global/skills` |
 
 父目录存在才认为该工具已安装，不会给没装的工具建空目录。
 
 ## 注意
 
-- `external_skills/` 与其下外部 skill 的 `.env` 等敏感文件已 gitignore，不进 git；换机器靠 `ext install` 复现。
-- `url` 来源更新是「整体替换」，已内置保留 `.env` / `.env.*`，其余本地改动会被覆盖。
+- `external_skills/` 与其下外部 skill 的 `.env` 等敏感文件已 gitignore，不进 git；换机器按 [`references/external-skills.md`](./references/external-skills.md) 手动重装。
 - `link` 遇非空目标目录默认跳过；`--force` 先备份成 `<目标>.bak-<时间戳>`。
 - `unlink` 只删链接本身，源文件不受影响。
-- 外部 skill 带 `node_modules` 时只提交源码，新机器进入目录自行 `npm install`。
 - 记不准的参数先查 `--help`，不猜。
+
