@@ -17,14 +17,20 @@ version: 1.0.0
 
 ## 安装 / 更新 / 卸载 CLI
 
+> **CLI 尚未发布到 npm registry**（`npm i -g @ielym/skill-sync` 会 404），只能从源码目录全局安装。
+
 ```bash
-npm i -g @ielym/skill-sync        # 全局安装，得到 skill-sync 命令
-# 或从源码目录装：npm i -g <cli 源码目录>
-npm update -g @ielym/skill-sync   # 更新到最新版
-npm uninstall -g @ielym/skill-sync # 卸载
+git clone https://github.com/ielym/clihub.git <cli 源码目录>   # 首次；已有则跳过
+cd <cli 源码目录> && npm i -g .          # 全局安装，得到 skill-sync 命令
+
+# 更新 CLI（与更新本 SKILL 无关）
+cd <cli 源码目录> && git pull && npm i -g .
+
+npm uninstall -g @ielym/skill-sync   # 卸载
 ```
 
 > npm 全局命令在你的 PATH 里，任一终端都能直接跑 `skill-sync`；不同 AI 工具无需任何额外配置，按命令名调用即可。
+> 本机实际安装位置：`D:\projects\cli_packages\skill-sync`（源码 + `npm i -g .`），改源码后重跑 `npm i -g .` 即生效。
 
 ## 源仓库（Skill 原始目录）位置
 
