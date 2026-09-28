@@ -30,7 +30,7 @@ npm uninstall -g @ielym/skill-sync   # 卸载
 ```
 
 > npm 全局命令在你的 PATH 里，任一终端都能直接跑 `skill-sync`；不同 AI 工具无需任何额外配置，按命令名调用即可。
-> 本机实际安装位置：`D:\projects\cli_packages\skill-sync`（源码 + `npm i -g .`），改源码后重跑 `npm i -g .` 即生效。
+> 源码目录位置自己定；改源码后重跑 `npm i -g .` 即生效。
 
 ## 源仓库（Skill 原始目录）位置
 
