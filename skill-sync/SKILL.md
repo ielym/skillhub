@@ -15,6 +15,10 @@ version: 1.0.0
 - 只有本 skill 负责「安装 / 同步」，其它 skill 一律只描述「怎么用」。
 - SKILL 与 CLI 是两个独立产物，**各自独立安装、独立更新**：更新 CLI 不会动本 SKILL，更新本 SKILL 也不会动 CLI。
 
+## 修改 skill 的红线
+
+> 所有 AI 工具都是通过软连接指向源仓库使用 skills 的，一处改动会影响全部工具。因此 **除非用户主动要求，否则禁止任何 AI 工具自行新增、修改或删除任何 skill（含本 skill 与 `external_skills/` 下内容）**。需要改动时，必须先由用户明确开口，再动手。
+
 ## 安装 / 更新 / 卸载 CLI
 
 > **CLI 尚未发布到 npm registry**（`npm i -g @ielym/skill-sync` 会 404），只能从源码目录全局安装。
