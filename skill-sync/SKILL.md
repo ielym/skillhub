@@ -103,7 +103,7 @@ skill-sync link --dir <目录>   # 或临时指定
 | Gemini CLI  | `~/.gemini/skills`             |
 | Antigravity | `~/.gemini/antigravity/skills` |
 | QoderWork   | `~/.qoderwork/skills`          |
-| Trae        | `~/.trae-cn/builtin/global/skills` |
+| Trae        | `~/.trae-cn/skills` |
 
 父目录存在才认为该工具已安装，不会给没装的工具建空目录。
 
