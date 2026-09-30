@@ -10,13 +10,9 @@ version: 1.0.0
 
 ## 前置条件
 
-1. **Python**：爬虫依赖 Python 3.12 + `httpx / pandas / pyarrow / duckdb / pydantic`。
+1. **Python**：固定使用 `python3`，需已安装爬虫依赖（`httpx / pandas / pyarrow / duckdb / pydantic`）；依赖缺失时 CLI 直接报错并返回非 0。
 2. **Node.js**：CLI 是 Node.js 薄封装，需要 Node ≥ 18。
-3. **环境变量**（首次使用配置一次）：
-   ```
-   EM_CRAWLER_PYTHON = D:\projects\todo_list\0926\股票爬虫代码架构实现_东方财富\runtime\python312\python.exe
-   EM_CRAWLER_ROOT   = D:\projects\todo_list\0926\股票爬虫代码架构实现_东方财富
-   ```
+3. **环境变量**：`EM_CRAWLER_ROOT` 指向爬虫根目录（含 `em_crawler/` 的目录）。
 
 ## 安装 CLI
 
