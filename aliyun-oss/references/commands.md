@@ -31,7 +31,7 @@
 
 | 变量 | 作用 |
 | --- | --- |
-| `ALIYUN_OSS_BUCKET` | 默认 Bucket；`upload` 省略 target 时自动拼成 `oss://<bucket>/<文件名>` |
+| `ALIYUN_OSS_BUCKET` | 默认 Bucket；`upload` 省略 target 或只给 Bucket 根时，自动拼成 `oss://<bucket>/temp/<文件名>`（禁止上传到根目录） |
 | `ALIYUN_OSS_OSSUTIL` | ossutil 可执行文件的绝对路径（PATH 中没有时使用） |
 | `ALIYUN_OSS_CERTIFICATION_BIN` | ielym-certification 可执行文件的绝对路径（PATH 中没有时使用） |
 
@@ -95,6 +95,9 @@ ossutil ls oss://<bucket>/<prefix>/             # 看输出末尾 Object Number
 # 0) 先确认环境与 Bucket
 aliyun-oss info
 aliyun-oss buckets
+
+# 上传路径规则：目标必须带至少一级目录前缀（oss://<bucket>/<dir>/...），
+# 禁止直接传到根目录；未指定前缀时默认使用 temp/（oss://<bucket>/temp/...）。
 
 # 1) 上传单个文件
 aliyun-oss upload <file> oss://<bucket>/reports/report.pdf

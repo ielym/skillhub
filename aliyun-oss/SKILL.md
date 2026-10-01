@@ -64,8 +64,8 @@ aliyun-oss buckets                               # 列出所有 Bucket
 aliyun-oss ls oss://my-bucket/data/              # 列出对象（-r 递归）
 aliyun-oss exists oss://my-bucket/a.pdf          # 判断对象是否存在（存在 0，不存在 1）
 aliyun-oss stat oss://my-bucket/a.pdf            # 查看对象元数据
-aliyun-oss upload <file> oss://my-bucket/        # 上传文件
-aliyun-oss upload <dir>/ oss://my-bucket/        # 上传目录（自动递归）
+aliyun-oss upload <file> oss://my-bucket/data/   # 上传文件（目标必须带目录前缀，缺省用 temp/）
+aliyun-oss upload <dir>/ oss://my-bucket/data/   # 上传目录（自动递归）
 aliyun-oss download oss://my-bucket/a.pdf <dir>  # 下载文件（-r 下载目录）
 aliyun-oss rm oss://my-bucket/old/a.txt          # 删除对象（-r 删除目录）
 aliyun-oss sync <dir>/ oss://my-bucket/data/     # 增量同步
@@ -90,6 +90,7 @@ if aliyun-oss exists oss://my-bucket/report.pdf; then echo "已存在"; else ech
 1. **同地域必须走内网 Endpoint**。客户端与 Bucket 同地域时（例如 ECS 与 Bucket 在同一地域），必须使用内网域名（形如 `oss-cn-<region>-internal.aliyuncs.com`，即 ielym-certification 返回的 `endpoints.internal`），通过环境变量 `ALIYUN_OSS_ENDPOINT` 注入；上传、下载、同步都不得改用外网 Endpoint。
 2. **只有确需公网时才用外网域名**。仅当要生成公网可访问的签名链接、或客户端确实不在同地域 VPC 内时，才显式指定外网 Endpoint。
 3. **不得随意降冷存储**。频繁访问的内容必须留在标准存储；长期不取的文件在降冷（低频/归档）前，必须先确认取回费用与最低存储时长。
+4. **禁止上传到 Bucket 根目录**。任何上传操作（`upload`、本地→OSS 的 `cp`、本地→OSS 的 `sync`）的目标都必须带至少一级目录前缀，即对象 Key 至少位于「二级目录」下，形如 `oss://<bucket>/<dir>/<file>`；不得直接上传到根下（如 `oss://<bucket>/` 或 `oss://<bucket>/<file>.pdf`）。若用户未指定目录前缀，**默认使用 `temp/`**，把目标改写为 `oss://<bucket>/temp/...` 后再执行，并在执行前向用户说明实际使用的路径。
 
 依据：上传不产生流量费，而下载走公网会按「外网流出流量」计费，是同地域场景下最主要的开销。
 
@@ -97,5 +98,5 @@ if aliyun-oss exists oss://my-bucket/report.pdf; then echo "已存在"; else ech
 
 - **`presign`** **生成的 URL 使用当前 Endpoint**：若默认走内网，产物形如 `https://<bucket>.oss-cn-<region>-internal.aliyuncs.com/...`，**只能在 VPC 内访问**；要分享到公网，请显式指定外网域名：`aliyun-oss presign oss://<bucket>/<key> -e oss-cn-<region>.aliyuncs.com`。
 - `rm -r` 与 `sync --delete` 会批量删除，执行前先用 `ls -r` 确认范围。
-- Bucket 名可用环境变量 `ALIYUN_OSS_BUCKET` 设为默认，`upload` 省略 target 时自动拼接。
+- Bucket 名可用环境变量 `ALIYUN_OSS_BUCKET` 设为默认；`upload` 省略 target（或只给 Bucket 根）时，自动拼接到 `oss://<bucket>/temp/` 下，不会落到根目录。
 

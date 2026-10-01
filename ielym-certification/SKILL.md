@@ -37,6 +37,7 @@ ielym-certification <provider> ...   # 调用某个 provider 取回凭证
 | provider | 说明 | 参考文档 |
 | --- | --- | --- |
 | `aliyun-oss` | 阿里云 OSS 访问凭证（按 Bucket 维度） | [references/aliyun-oss.md](references/aliyun-oss.md) |
+| `api-key` | 第三方服务 API Key / Token（按服务名维度，如 artificial-analysis） | [references/api-key.md](references/api-key.md) |
 
 新增 provider 时，在本表补一行，并在 `references/` 下补一份同名文档。
 
