@@ -35,11 +35,52 @@ arxiv --query "cat:cs.CL" --start 100 --max-results 50
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `--query` | `cat:cs.AI` | 检索式：`cat:` 分类、`au:` 作者、`ti:` 标题；可用 `AND` / `OR` / `ANDNOT` 组合 |
+| `--query` | `cat:cs.AI` | 检索式 `search_query`，语法见下方[检索式语法](#检索式语法) |
 | `--start` | `0` | 起始偏移，翻页用 |
-| `--max-results` | `20` | 返回条数上限 |
+| `--max-results` | `20` | 返回条数上限（单次切片 ≤2000，总量 ≤30000） |
 | `--sort-by` | `submittedDate` | `relevance` / `lastUpdatedDate` / `submittedDate` |
 | `--sort-order` | `descending` | `ascending` / `descending` |
+
+## 检索式语法
+
+`--query` 传入 arXiv `search_query`，由「字段前缀 + 布尔运算」组合而成。
+
+**字段前缀**（官方支持的全部字段）：
+
+| 前缀 | 含义 |
+| --- | --- |
+| `ti` | Title 标题 |
+| `au` | Author 作者 |
+| `abs` | Abstract 摘要 |
+| `co` | Comment 备注/评论 |
+| `jr` | Journal Reference 期刊引用 |
+| `cat` | Subject Category 学科分类，如 `cat:cs.CV` |
+| `rn` | Report Number 报告号 |
+| `id` | arXiv ID（官方建议改用 `id_list`，CLI 未暴露此参数） |
+| `all` | 以上全部字段（不写前缀时的默认范围） |
+
+**布尔运算与分组**：
+
+- 运算符 `AND` / `OR` / `ANDNOT` 必须大写；
+- 用括号 `( ... )` 分组子表达式；
+- 用双引号 `"..."` 表示精确短语；
+- 相邻项以空格连接等价于分词，**建议显式写 `AND` / `OR` / `ANDNOT` 以避免歧义**。
+
+```bash
+arxiv --query "all:electron AND all:proton"
+arxiv --query "au:bengio OR au:lecun"
+arxiv --query "cat:cs.LG ANDNOT cat:cs.CV"
+arxiv --query "(ti:sparse AND ti:autoencoder) AND cat:cs.LG"
+arxiv --query "ti:\"electron thermal conductivity\""
+arxiv --query "(ti:\"video generation\" OR abs:\"video generation\") AND (cat:cs.CV OR cat:cs.AI)"
+```
+
+**日期区间**（仅 `submittedDate` / `lastUpdatedDate` 支持）：
+
+```bash
+arxiv --query "cat:cs.CV AND submittedDate:[202501010000 TO 202512312359]"
+arxiv --query "cat:cs.CV AND lastUpdatedDate:[202501010000 TO 202512312359]"
+```
 
 ## 输出
 
