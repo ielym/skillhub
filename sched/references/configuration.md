@@ -44,7 +44,9 @@
     "heartbeat_timeout_sec": 120,
     "cooldown_sec": 60,
     "grace_sec": 40,
-    "max_resource_attempts": 0
+    "max_resource_attempts": 0,
+    "resource_backoff_base_sec": 300,
+    "resource_backoff_cap_sec": 3600
   },
   "resource": {
     "window_samples": 8,
@@ -76,6 +78,8 @@
 | runner.heartbeat_timeout_sec | 120 | 全局心跳超时兜底；任务 `heartbeat.timeout_sec` 可单独设更长（下限 5）；manual 触发运行时阈值 ×2 |
 | runner.cooldown_sec | 60 | success 与 preempted 后同 job 的冷却（防秒级连触发/连环抢占） |
 | runner.max_resource_attempts | 0 | 资源重试封顶：**0=不设上限**（退让重试，默认）；正整数 N=第 N 次仍资源错误则转人工（止损逃生舱） |
+| runner.resource_backoff_base_sec | 300 | 外部资源错误（exit 100/101）退避起始秒数：第一次失败等这么久再试，连续失败翻倍 |
+| runner.resource_backoff_cap_sec | 3600 | 退避封顶秒数（默认 1 小时），要求 ≥ base；**这两个参数与上面的 cooldown/重试上限可在管理台「总览 → 运行参数」面板直接修改，保存即热更新，无需重启** |
 | resource.window_samples | 8 | 画像 P95 滑窗样本数（最近 N 次正式 run） |
 | resource.overshoot | 1.2 | 画像 P95 × 该系数为准出/账本预估 |
 | resource.memory_high_ratio | 1.5 | run cgroup memory.high = 预估×1.5（内核节流软限） |
@@ -95,11 +99,23 @@
 | web.auth_token | 空 | HTTP Basic Auth 密码（用户名任意，仅校验密码，常量时间比较），保护全部页面与接口；非空即启用。**绑非回环地址的推荐做法** |
 | web.allow_public_no_auth | false | 显式承认"无密码暴露公网"。仅当 host 非回环且 auth_token 为空时需要；不设此开关又改公网 host，serve 启动直接失败（防不知不觉裸奔） |
 
-资源退避重试的**实际序列**（代码计算，不可配置）：第 1 次失败等 300s，第 2 次 600s，
-第 3 次 1200s，第 4 次 2400s，之后指数增长并封顶 3600s（1 小时）；
-`max_resource_attempts>0` 时在第 N 次转人工。**本机固定资源不足（exit 100）与外部资源
-错误（exit 101：代理/隧道失效、429 限流、配额耗尽等）走同一条退避重试路径**；调度器不
-感知、不池化外部资源（不同账号/不同协议无法统一管理），只依据任务自报的退出码调整调度。
+资源退避重试的默认序列（`resource_backoff_base_sec` / `resource_backoff_cap_sec` 可在管理台
+面板热更新）：第 1 次失败等 300s，第 2 次 600s，第 3 次 1200s，第 4 次 2400s，之后指数增长
+并封顶 3600s（1 小时）；`max_resource_attempts>0` 时在第 N 次转人工。**本机固定资源不足
+（exit 100）与外部资源错误（exit 101：代理/隧道失效、429 限流、配额耗尽等）走同一条退避
+重试路径**；调度器不感知、不池化外部资源（不同账号/不同协议无法统一管理），只依据任务自报
+的退出码调整调度。
+
+**任务侧责任（重要）**：隧道代理每连接换出口 IP，单连接被掐断（IncompleteRead/响应截断）是
+高频瞬时故障——任务**必须先就地快速重试若干次**（每次新连接换新 IP，间隔几秒递增），连续
+失败才 `sys.exit(101)` 交给调度器长退避；一次抖动就 101 等于白白等一个小时。
+判断标准：换个连接/换个 IP 可能成功的问题，先自己重试；整类资源在一段时间内确定性不可用，
+才上报 101。
+
+管理台「总览 → 运行参数」面板只暴露 6 个用户需要感知的参数（timezone、cooldown_sec、
+resource_backoff_base/cap_sec、max_resource_attempts、auto_admit_retry_sec），保存即热更新；
+抢占宽限、心跳超时、cgroup 系数、web 端口等引擎内部参数不出现在面板，需要时手编
+settings.json（改后重启或下次面板保存不影响它们——面板更新是白名单合并，不碰其他字段）。
 
 ## 3. CLI 完整行为（均在代码根执行：`python3 -m sched <cmd>`）
 
@@ -113,7 +129,7 @@
 
 **没有的命令（不要找、不要自己造）**：无独立 web/ui 命令（管理台**只能内嵌在 serve 进程**，
 另起 Web 进程写 scheduler_state.json 会与 serve 内存态互相覆盖）、无 unregister、
-无 kill/stop 单个任务、无 run --dry-run、无改 settings 的 CLI（手编 settings.json）、
+无 kill/stop 单个任务、无 run --dry-run、无改 settings 的 CLI（6 个常用参数在管理台面板热更新，其余手编 settings.json）、
 **无任何外部资源（代理/配额等）配置命令**（不存在 set-soft 一类接口：外部资源无法统一
 管理，任务用 exit 101 自分类、调度器退避重试）、无查看 run 详情的 CLI（直接读
 `data/runs/<id>.jsonl` 与日志文件，或用管理台）。
