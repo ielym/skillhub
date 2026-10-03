@@ -11,7 +11,7 @@
 ### A0 开调之前（设计冻结）
 
 - [ ] 任务 id 合法（`^[a-zA-Z0-9_-]{1,64}$`，非 `_/.` 开头），目录名与 id 一致。
-- [ ] 调度类型、interval/窗口、`priority`（按 SKILL.md 分级建议，非默认 0）已定。
+- [ ] 调度类型、interval/窗口、`priority`（按 [workflow.md](workflow.md) 阶段0 分级建议，非默认 0）已定。
 - [ ] 资源预算有数字：CPU 核数、内存 MB、软资源名与每 run 令牌数；来源标注（实测/保守估算）。
 - [ ] 断点字典设计已定：键、粒度（建议单步 ≤20s 工作量）、重放幂等方案。
 - [ ] 错误分类表已定：哪些异常 resource（100/101）、哪些 logic（fail）、哪些数据 skip/110/dead_letter。
@@ -70,7 +70,7 @@ SCHED_DRY_RUN=1 SCHED_RUN_ID=ckpt2 python3 run.py   # 预期 exit=0 且从断点
 
 ### B1 注册前最终自检
 
-- [ ] cgroup 自检输出 `cgroup OK`（命令见 SKILL.md 部署前置 3）；若 DEGRADED：已评估申报可信度并在
+- [ ] cgroup 自检输出 `cgroup OK`（命令见 [deployment.md](deployment.md) §1）；若 DEGRADED：已评估申报可信度并在
       交付说明标注，资源敏感型任务暂缓交付。
 - [ ] runtime.user 在目标机存在（默认 sched-run）；多使用者使用各自独立用户。
 - [ ] 正式 task.json 字段全部显式填实：priority、schedule、resources（非 0、有依据）、heartbeat、

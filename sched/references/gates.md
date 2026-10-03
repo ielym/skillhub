@@ -15,7 +15,7 @@
 - 闸期进程的运行身份：task.json `runtime.user`（默认 sched-run）；降权失败闸直接失败，**绝不静默回升 root 跑**。
 - 闸期环境与正式一致地注入 `SCHED_*` 与白名单变量；**闸内子进程的 stdout/stderr 被丢弃（DEVNULL）**，
   register 只回报闸名与原因。要看错误输出，必须按本文各闸的"实证自检"命令在任务目录手工裸跑复现。
-- **cgroup 降级影响闸门可信度**：闸3/闸5 的内存实测依赖 cgroup `memory.peak`。按 SKILL.md 部署前置第 3 条
+- **cgroup 降级影响闸门可信度**：闸3/闸5 的内存实测依赖 cgroup `memory.peak`。按 [deployment.md](deployment.md) §1
   自检；`cgroup DEGRADED` 时实测峰值为 0，闸4 只信申报值，闸5 不再有内存边界，注册需谨慎并在交付说明标注。
 - 每个非 exempt 任务必须通过 **全部 5 道闸**；`contract_exempt=true` 任务通过 **闸1–4**（无断点能力要求，
   之后只能 manual 触发）。

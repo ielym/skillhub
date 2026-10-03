@@ -1,8 +1,9 @@
 # 配置与参数完整参考（运维/任务作者必读）
 
-> 本文覆盖调度器**全部可配置面**：任务侧 task.json 字段见 [contracts.md](contracts.md)，
-> 本文讲运维侧 `data/settings.json`、全部 CLI 的确切行为、调度时刻语义、数据/日志布局、部署步骤。
-> 所有默认值与代码根 `sched/config.py` 当前代码逐一对应。
+> 本文覆盖调度器**可配置面**：任务侧 task.json 字段见 [contracts.md](contracts.md)，
+> 本文讲路径与数据布局、运维侧 `data/settings.json` 全参数、全部 CLI 的确切行为。
+> 触发时刻与调度语义见 [scheduling.md](scheduling.md)；部署、Web 暴露与运维操作见
+> [deployment.md](deployment.md)。所有默认值与代码根 `sched/config.py` 当前代码逐一对应。
 
 ## 1. 路径与多实例（SCHED_HOME）
 
@@ -98,24 +99,10 @@
 | web.allow_public_no_auth | false | 显式承认"无密码暴露公网"。仅当 host 非回环且 auth_token 为空时需要；不设此开关又改公网 host，serve 启动直接失败（防不知不觉裸奔） |
 
 资源退避重试的**实际序列**（代码计算，不可配置）：第 1 次失败等 300s，第 2 次 600s，
-第 3 次起 1200s 并维持（20 分钟封顶，不是 1 小时）；`max_resource_attempts>0` 时在第 N 次转人工。
+第 3 次 1200s，第 4 次 2400s，之后指数增长并封顶 3600s（1 小时）；
+`max_resource_attempts>0` 时在第 N 次转人工。
 
-## 3. 调度时刻语义（interval / once / manual）
-
-- **interval 无时间窗**：首次触发时刻 = 注册生效（或 serve 启动/热加载 upsert）后**再过一个 interval**，
-  不是"注册后立刻跑一次"，也不按整点对齐；之后每隔 interval 一次。
-- **interval 带 start_time/end_time（可带 weekdays）**：触发点对齐到**窗口起点的 interval 网格**
-  （如 08:00 起每 3600s → 08:00/09:00/…/22:00）；`end_time < start_time` 视为跨天窗
-  （如 22:00–06:00）；weekdays 不填=每天，1=周一…7=周日。
-- **once**：`once_at` 必须是带时区 ISO8601（如 `2026-10-03T20:00:00+08:00`）；
-  **时刻已过 → 永不触发**（list 中 next 显示为空），只能重新 register 或改配置。
-- **manual**：不自动触发；只能 `run <id>` 入队。注意 manual 任务**同样参与抢占/心跳/资源体系**
-  （仅心跳阈值 ×2）；`contract_exempt` 的 manual 任务才不可抢占、不可自动恢复。
-- 热加载保序：运行中改 task.json 不会把未到的触发时刻重置为 now+interval。
-- 到点时在途实例已达 `max_instances`：`overflow=skip` 本次跳过（记 decisions 日志）；
-  `queue` 照常入队排队。跳过/排队都不算失败。
-
-## 4. CLI 完整行为（均在代码根执行：`python3 -m sched <cmd>`）
+## 3. CLI 完整行为（均在代码根执行：`python3 -m sched <cmd>`）
 
 | 命令 | 确切行为与输出 | 失败情形 |
 | --- | --- | --- |
@@ -132,57 +119,4 @@
 无查看 run 详情的 CLI（直接读 `data/runs/<id>.jsonl` 与日志文件，或用管理台）。
 （停用任务可用管理台开关，等价于手编 jobs.json 的 enabled。）
 
-### 4.1 Web 管理台能力与边界（serve --web）
-
-- **只读**：总览（账本/软资源/整机容量/参数）、任务表（下次触发/ok/启用）、WQ 与在途、run 历史与
-  stdout/stderr、decisions 审计流、资源画像（P95/声明/样本数）。
-- **写操作全部与 CLI 等价且走同一 SchedulerService 实例**：手动触发（只入队，绝不旁路拉起进程）、
-  enable/disable、set-soft、新建任务（生成最小合规骨架）、在线编辑任务文件、跑五闸注册
-  （SSE 逐闸推送通过/失败原因与耗时，注册前自动执行 `chown -R <run_user>` 并把写入文件置 0644）。
-- 文件编辑安全边界：仅限任务目录内 `.py/.json/.txt/.md/.conf/.yaml/.sh` 等源码类文件（单文件 ≤1MB）；
-  `cache/`、`results/`、`__pycache__/` 禁止经 Web 读写；目录穿越（`..`）拒绝。
-- 所有写动作落 `decisions.jsonl`（web_create_task/web_save_file/web_set_enabled…）可审计。
-- **暴露面三档（按安全优先）**：
-  1. 默认回环 + SSH 隧道（零额外攻击面）：`ssh -L 8799:127.0.0.1:8799 <服务器>`；
-  2. 公网/局域网 + `web.auth_token`：host 改 `0.0.0.0` 并配密码，浏览器 Basic 弹窗输入（用户名任意）；
-  3. 公网无密码：必须显式 `web.allow_public_no_auth=true` 否则 serve 拒绝启动——
-     **管理台能在线改 .py 并注册执行（等同 RCE），此档风险自负，强烈建议同时在云安全组
-     把入站 8799 限制为特定源 IP 段**，不要对 0.0.0.0/0 开放。
-- 云主机还需在**安全组/防火墙**放行对应 TCP 入站端口；改 host 只解决监听，不替代安全组。
-  HTTP 明文（含 Basic 密码）会经链路传输，需要保密时用反代 + TLS（nginx + 证书）。
-
-## 5. 首次部署清单（root 执行一次）
-
-```bash
-# 1) 运行用户（默认 sched-run；多租户各自独立用户，在任务 runtime.user 指定）
-useradd -r -m -s /usr/sbin/nologin sched-run
-
-# 2) cgroup v2 嵌套控制器委派（关键！不做则硬限额静默失效，见 SKILL.md 自检命令）
-mkdir -p /sys/fs/cgroup/sched
-echo '+memory +cpu' > /sys/fs/cgroup/sched/cgroup.subtree_control
-
-# 3) 任务目录权限：sched-run 需能读任务代码、写 cache/results（建议属主 sched-run 或 o+rx）
-chown -R sched-run:sched-run <代码根>/tasks/<id>
-
-# 4) 软资源容量（任务声明了 resources.soft 才需要）
-python3 -m sched set-soft proxy 10
-
-# 5) 常驻（建议 systemd 托管，ExecStart=python3 -m sched serve，重启策略 on-failure）
-python3 -m sched serve --web     # 加 --web 启动内嵌管理台（默认 127.0.0.1:8799）
-```
-
-任务进程环境补充事实：降权执行时任务进程的 `HOME` 会被改成目标用户的家目录（不是 /root）；
-透传白名单仅 `PATH HOME LANG TZ LC_ALL PYTHONPATH PYTHONUNBUFFERED`，PYTHONPATH 自动前置项目根；
-密钥不要走 env（同机进程可读 `/proc/<pid>/environ`），放任务目录 600 权限文件。
-
-## 6. 常见运维操作
-
-- 改任务配置/代码：编辑 task.json/run.py → serve ≤30s 热加载（list 的 ok 变 false 即配置非法，修到 ok 自动恢复）；
-  改了 `resources` 需要重新 register 才会更新画像/注册信息。
-- 临时停用任务：编辑 `data/jobs.json` 把该 id 的 `enabled` 置 false（这是注册表的设计字段），
-  或在管理台任务表拨动开关（两者完全等价）；在途 run 不受影响，跑完后不再触发；重新启用置回 true。
-- 删除任务：按 [acceptance.md](acceptance.md) C4 的 5 步流程（jobs.json 删条目 → 删任务目录 → 删 runs 日志）。
-- 任务一直 waiting：先 `status` 看账本余量与软资源 cap/used，再看 `decisions.jsonl` 尾部；
-  容量未配置、资源申报超剩余、处于 backoff/cooldown 都会等待，均属正常排队语义。
-- serve 重启：启动时自动把上轮在途 run 记 interrupted 并携断点重入队（contract_exempt 只记待人工）；
-  残留孤儿进程组会被 kill，残留 cgroup 会被清理。
+Web 管理台的能力边界、文件编辑安全边界与公网暴露三档安全模式见 [deployment.md](deployment.md) §2。

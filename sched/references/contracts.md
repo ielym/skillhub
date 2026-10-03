@@ -1,6 +1,6 @@
 # 技术契约参考（task.json / SDK / 环境变量 / 状态文件 / 错误码）
 
-> 本文是任务作者与调度器之间的"接线手册"，与 SKILL.md 的铁律、gates.md 的闸门配套。
+> 本文是任务作者与调度器之间的"接线手册"，与 [rules.md](rules.md) 的铁律、[gates.md](gates.md) 的闸门配套。
 > 所有行为以代码根当前实现为准。路径一律相对任务目录
 > （`$SCHED_WORKSPACE`，即 `tasks/<id>/`）。
 
