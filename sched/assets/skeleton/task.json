@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "name": "skeleton",
+  "description": "任务骨架模板：复制到 tasks/<你的任务id>/ 后按实际情况替换全部字段。演示断点游标、dry-run 副作用关断、skip/110 二刷、逻辑错误 LOGIC 标记。",
+  "entry": {
+    "file": "run.py",
+    "interpreter": "python3",
+    "args": [],
+    "cwd": "."
+  },
+  "schedule": {
+    "type": "interval",
+    "interval": 3600,
+    "start_time": "08:00",
+    "end_time": "22:00",
+    "weekdays": [1, 2, 3, 4, 5],
+    "allow_overrun": false,
+    "max_instances": 1,
+    "overflow": "skip"
+  },
+  "priority": 40,
+  "env": {},
+  "outputs": {
+    "expect": ["results/final.json"]
+  },
+  "resources": {
+    "cpu": 0.2,
+    "memory_mb": 128,
+    "soft": {}
+  },
+  "error_rules": {
+    "resource_regex": [],
+    "logic_regex": ["LOGIC:"]
+  },
+  "heartbeat": {
+    "timeout_sec": 120
+  },
+  "smoke": {
+    "mode": "dry",
+    "max_runtime_sec": 60,
+    "signal_after_sec": 1.5
+  },
+  "runtime": {
+    "user": "sched-run"
+  },
+  "contract_exempt": false
+}

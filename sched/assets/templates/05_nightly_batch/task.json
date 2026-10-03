@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "name": "nightly-batch",
+  "description": "场景模板05：夜间大批量计算（低优先级、长窗口、细粒度分片断点、allow_overrun=true 保证跑完；白天被任何任务抢占都能断点续跑）。复制后改名。",
+  "entry": {
+    "file": "run.py",
+    "interpreter": "python3",
+    "args": [],
+    "cwd": "."
+  },
+  "schedule": {
+    "type": "interval",
+    "interval": 86400,
+    "start_time": "23:00",
+    "end_time": "08:00",
+    "allow_overrun": true,
+    "max_instances": 1,
+    "overflow": "skip"
+  },
+  "priority": 15,
+  "env": {},
+  "outputs": {
+    "expect": ["results/nightly_result.json"]
+  },
+  "resources": {
+    "cpu": 1.0,
+    "memory_mb": 512,
+    "soft": {}
+  },
+  "error_rules": {
+    "resource_regex": ["timeout", "connection", "quota", "temporarily", "oom", "memory"],
+    "logic_regex": ["LOGIC:"]
+  },
+  "heartbeat": {
+    "timeout_sec": 120
+  },
+  "smoke": {
+    "mode": "dry",
+    "max_runtime_sec": 60,
+    "signal_after_sec": 1.5
+  },
+  "runtime": {
+    "user": "sched-run"
+  },
+  "contract_exempt": false
+}
