@@ -11,9 +11,10 @@
 | --- | --- |
 | 代码根（默认 HOME） | scheduler 仓库 clone 目录（`sched` 包上一级；`SCHED_HOME` 可覆盖） |
 | `$SCHED_HOME/tasks/<id>/` | 任务目录（task.json + run.py + cache/ + results/） |
-| `$SCHED_HOME/data/settings.json` | 全局设置（首次启动/注册时自动生成默认值） |
+| `$SCHED_HOME/data/settings.json` | 全局设置（首次启动时自动生成默认值） |
 | `$SCHED_HOME/data/jobs.json` | 注册表唯一真源，形如 `{"<id>": {"enabled": true}}` |
-| `$SCHED_HOME/data/runtime/scheduler_state.json` | WQ 队列、cooldown/backoff、软资源容量（**禁手改**） |
+| `$SCHED_HOME/data/runtime/scheduler_state.json` | WQ 队列、cooldown/backoff（**禁手改**） |
+| `$SCHED_HOME/data/runtime/admission.json` | 自动上线检查状态（未通过任务的原因/尝试次数/下次重试时刻，自动维护，勿手改） |
 | `$SCHED_HOME/data/runtime/profiles.json` | 任务资源画像（冒烟+正式 run 实测，自动更新） |
 | `$SCHED_HOME/data/runtime/ledger.json` | 资源账本（运行期内存态，勿手改） |
 | `$SCHED_HOME/data/runtime/active.json` | 在途 run 快照（崩溃恢复依据，勿手改） |
@@ -36,9 +37,7 @@
   "starvation_sec": 3600.0,
   "preempt_exempt_sec": 60.0,
   "data_risk_max_reschedules": 3,
-  "soft_degrade_threshold": 3,
-  "soft_degrade_window_sec": 600.0,
-  "soft_degrade_cooldown_sec": 300.0,
+  "auto_admit_retry_sec": 300.0,
   "hot_reload_sec": 30.0,
   "runner": {
     "kill_grace_sec": 10,
@@ -88,10 +87,8 @@
 | starvation_sec | 3600 | 同优先级等待超该秒数 → 饿死保护临时提权（101）参与排序 |
 | preempt_exempt_sec | 60 | 被抢占任务重入队后的豁免窗口（秒），期内不再被抢 |
 | data_risk_max_reschedules | 3 | 110 二刷最大自动轮数，达到后转人工 |
-| soft_degrade_threshold | 3 | 软资源错误计数阈值（窗口内 101 次数） |
-| soft_degrade_window_sec | 600 | 软资源错误计数窗口 |
-| soft_degrade_cooldown_sec | 300 | 触发降额后的冷却时长，到期恢复登记容量 |
-| hot_reload_sec | 30 | serve 重读 jobs.json/task.json 的周期；改任务配置无需重启，≤30s 生效 |
+| auto_admit_retry_sec | 300 | 新任务放入 `tasks/` 后自动跑五道上线检查；检查失败的冷却秒数（到期自动重试；任务文件一旦被修改则**立即重试**，不等冷却） |
+| hot_reload_sec | 30 | serve 重读 jobs.json/task.json、扫描新任务目录的周期；改任务配置无需重启，≤30s 生效 |
 | web.enabled | false | 是否在 serve 进程内嵌 Web 管理台（FastAPI/uvicorn）；也可用 `serve --web/--no-web` 临时覆盖 |
 | web.host | 127.0.0.1 | 监听地址。改成 `0.0.0.0`（公网/局域网）时强制要求 auth_token 或显式风险开关，否则 serve 拒绝启动 |
 | web.port | 8799 | 管理台端口；页面 `/`，接口 `/api/*`，OpenAPI `/api/docs` |
@@ -100,23 +97,26 @@
 
 资源退避重试的**实际序列**（代码计算，不可配置）：第 1 次失败等 300s，第 2 次 600s，
 第 3 次 1200s，第 4 次 2400s，之后指数增长并封顶 3600s（1 小时）；
-`max_resource_attempts>0` 时在第 N 次转人工。
+`max_resource_attempts>0` 时在第 N 次转人工。**本机固定资源不足（exit 100）与外部资源
+错误（exit 101：代理/隧道失效、429 限流、配额耗尽等）走同一条退避重试路径**；调度器不
+感知、不池化外部资源（不同账号/不同协议无法统一管理），只依据任务自报的退出码调整调度。
 
 ## 3. CLI 完整行为（均在代码根执行：`python3 -m sched <cmd>`）
 
 | 命令 | 确切行为与输出 | 失败情形 |
 | --- | --- | --- |
-| `register <id>` | 校验用户存在 → 跑五道闸 → 写 jobs.json(enabled=true)+初始画像 → 输出 `注册成功：<id>` 及每闸通过原因 | 目录/task.json 非法、用户不存在、任一闸不过：打印 `注册失败：<各闸名: 原因>`，exit 1，不写注册表 |
-| `run <id>` | **只入队**（trigger=manual，状态 waiting），输出 `已入队：<run_id> (<id>, priority=<n>)`；是否/何时跑由 serve 准出 | 未注册/`ok=false`（task.json 损坏）：`触发失败：...` exit 1；**无 --dry-run**，dry 只能靠任务自己读 SCHED_DRY_RUN |
+| `register <id>` | **可选的立即检查**：立刻对该任务跑五道上线检查（serve 本身会在热加载时自动检查新任务，此命令用于不想等 ≤30s 扫描）。通过则写 jobs.json(enabled=true)+初始画像，输出 `上线检查通过，已纳入调度：<id>` 及每闸结果 | 目录/task.json 非法、用户不存在、任一闸不过：打印 `上线检查未通过：<原因>`，exit 1，不写注册表 |
+| `run <id>` | **立即运行一次**（trigger=manual，只入队），输出 `已加入运行队列：<run_id> (<id>, priority=<n>)`；是否/何时跑由 serve 准出。也是 `contract_exempt`（声明不可断点恢复）任务的人工触发通道 | 任务不存在/`ok=false`（task.json 损坏）：`运行失败：...` exit 1；**无 --dry-run**，dry 只能靠任务自己读 SCHED_DRY_RUN |
 | `list` | 每行 `<id>  pri=<n> ok=<bool> next=<ISO 时刻或 ->`（先热加载，manual/过期 once 显示 `-`） | 仅读，不失败 |
-| `status` | `jobs/waiting/running` 计数 + 账本 reserved/actual 内存 + 每行软资源 `soft[<name>] cap=<n> used=<n>` | 仅读 |
-| `set-soft <name> <n>` | 立即设置软资源容量并持久化（n 为非负整数；0=不允许使用，未配置=无该池，任务将永远等待） | n 非整数报错 |
-| `serve` | 前台常驻：单实例 flock、cgroup 自检（不可用打印 WARNING 降级运行）、热加载、触发/准出/抢占/监测四 tick（1s）；Ctrl-C 优雅停机（先 SIGTERM 等 kill_grace_sec，再 SIGKILL；在途 run 以 interrupted 断点重入队）。加 `--web` 同时启动内嵌管理台（打印 `管理台：http://...`），`--no-web` 强制不启动 | 已有实例在跑：`启动失败：已有调度器实例在运行（runtime/scheduler.lock 被占用）` exit 1 |
+| `status` | 任务数/等待运行/运行中计数 + 账本预留/实测内存；若有未通过上线检查的任务，逐个打印 `[未通过] <id>：<原因>` | 仅读 |
+| `serve` | 前台常驻：单实例 flock、cgroup 自检（不可用打印 WARNING 降级运行）、**自动发现 `tasks/` 新任务并后台跑五道上线检查**（失败原因与重试时刻可在 status/管理台/admission.json 查看）、热加载、触发/准出/抢占/监测四 tick（1s）；Ctrl-C 优雅停机（先 SIGTERM 等 kill_grace_sec，再 SIGKILL；在途 run 以 interrupted 断点重入队）。加 `--web` 同时启动内嵌管理台（打印 `管理台：http://...`），`--no-web` 强制不启动 | 已有实例在跑：`启动失败：已有调度器实例在运行（runtime/scheduler.lock 被占用）` exit 1 |
 
 **没有的命令（不要找、不要自己造）**：无独立 web/ui 命令（管理台**只能内嵌在 serve 进程**，
 另起 Web 进程写 scheduler_state.json 会与 serve 内存态互相覆盖）、无 unregister、
 无 kill/stop 单个任务、无 run --dry-run、无改 settings 的 CLI（手编 settings.json）、
-无查看 run 详情的 CLI（直接读 `data/runs/<id>.jsonl` 与日志文件，或用管理台）。
-（停用任务可用管理台开关，等价于手编 jobs.json 的 enabled。）
+**无任何外部资源（代理/配额等）配置命令**（不存在 set-soft 一类接口：外部资源无法统一
+管理，任务用 exit 101 自分类、调度器退避重试）、无查看 run 详情的 CLI（直接读
+`data/runs/<id>.jsonl` 与日志文件，或用管理台）。
+（停用任务可用管理台开关，等价于手编 jobs.json 的 enabled；想彻底移除就把任务目录移出 `tasks/`。）
 
 Web 管理台的能力边界、文件编辑安全边界与公网暴露三档安全模式见 [deployment.md](deployment.md) §2。

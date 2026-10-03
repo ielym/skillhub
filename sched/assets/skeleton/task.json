@@ -13,7 +13,13 @@
     "interval": 3600,
     "start_time": "08:00",
     "end_time": "22:00",
-    "weekdays": [1, 2, 3, 4, 5],
+    "weekdays": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
     "allow_overrun": false,
     "max_instances": 1,
     "overflow": "skip"
@@ -21,16 +27,19 @@
   "priority": 40,
   "env": {},
   "outputs": {
-    "expect": ["results/final.json"]
+    "expect": [
+      "results/final.json"
+    ]
   },
   "resources": {
     "cpu": 0.2,
-    "memory_mb": 128,
-    "soft": {}
+    "memory_mb": 128
   },
   "error_rules": {
     "resource_regex": [],
-    "logic_regex": ["LOGIC:"]
+    "logic_regex": [
+      "LOGIC:"
+    ]
   },
   "heartbeat": {
     "timeout_sec": 120

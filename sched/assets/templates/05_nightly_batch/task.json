@@ -20,16 +20,26 @@
   "priority": 15,
   "env": {},
   "outputs": {
-    "expect": ["results/nightly_result.json"]
+    "expect": [
+      "results/nightly_result.json"
+    ]
   },
   "resources": {
     "cpu": 1.0,
-    "memory_mb": 512,
-    "soft": {}
+    "memory_mb": 512
   },
   "error_rules": {
-    "resource_regex": ["timeout", "connection", "quota", "temporarily", "oom", "memory"],
-    "logic_regex": ["LOGIC:"]
+    "resource_regex": [
+      "timeout",
+      "connection",
+      "quota",
+      "temporarily",
+      "oom",
+      "memory"
+    ],
+    "logic_regex": [
+      "LOGIC:"
+    ]
   },
   "heartbeat": {
     "timeout_sec": 120

@@ -1,22 +1,28 @@
-# 五道闸门禁细则（register 强制，逐条可验证）
+# 五道闸上线检查细则（自动准入，逐条可验证）
 
-> 本文是 `python3 -m sched register <id>` 实际执行的准入机制的权威说明，
-> 全部判定与调度器 `sched/contract.py` 实现一一对应。**注册前逐条自检，注册失败时按本文对照修复。**
+> 本文是调度器对 `tasks/<id>/` 新任务自动执行的五道准入闸的权威说明
+> （serve 在热加载扫描时后台执行；`python3 -m sched register <id>` 可立即手动触发一次），
+> 全部判定与调度器 `sched/contract.py` 实现一一对应。**任务上线前逐条自检，检查未通过时按本文对照修复。**
 > 严禁通过修改调度器源码、task.json 注水、手改数据文件等任何方式应付闸门——闸是给无人值守运行上的保险。
 
 ## 0. 通则
 
-- 注册只做两件事的二选一：**五道闸全过 → 写入 `data/jobs.json`（enabled=true）+ 初始画像**；任一闸不过
-  → 任务**被明确拒绝加入调度**，注册表不留 enabled 记录，打印每个失败闸的 `闸名: 原因`。
-- 五道闸全部由 **register CLI 进程在本机真实拉起子进程**完成，串行执行，最多 4 次子进程：
+- 上线检查只做两件事的二选一：**五道闸全过 → 写入 `data/jobs.json`（enabled=true）+ 初始画像**；任一闸不过
+  → 任务**被明确拒绝纳入调度**，注册表不留 enabled 记录，失败原因进入 `data/runtime/admission.json`
+  并在管理台/`status` 展示为"未通过：闸名: 原因"。
+- 新任务无需任何手动动作：把任务目录放进 `tasks/`，serve 最迟一个热加载周期（≤30s）发现它并**在后台
+  串行**跑闸（同一时刻只检查一个任务）；检查期间不阻塞调度主循环。也可随时 `register <id>` 立即检查。
+- 失败后两条重试路径：①冷却到期（`auto_admit_retry_sec` 默认 300s）自动重试，尝试次数逐次累加；
+  ②任务目录内文件被修改（mtime 变化）→ **立即重试，不等冷却**。删掉任务目录即放弃该任务。
+- 五道闸全部由调度器在本机**真实拉起子进程**完成，串行执行，最多 4 次子进程：
   闸2（探针 1 次）→ 闸3（冒烟 1 次）→ 闸4（纯计算，不拉进程）→ 闸5（非 exempt 任务：打断跑 + 恢复跑 2 次）。
-  加上可能的进程收尾等待，**实测单任务 register 约 10–20s**（小步 dry 冒烟）；耗时随冒烟步数线性增长，
+  加上可能的进程收尾等待，**实测单任务检查约 10–20s**（小步 dry 冒烟）；耗时随冒烟步数线性增长，
   硬上限由各闸超时决定（探针 30s、冒烟 max_runtime_sec 默认 60s、断点两次各 60s）。闸2/3/5 均有超时杀进程兜底，不会无限挂住。
 - 闸期进程的运行身份：task.json `runtime.user`（默认 sched-run）；降权失败闸直接失败，**绝不静默回升 root 跑**。
 - 闸期环境与正式一致地注入 `SCHED_*` 与白名单变量；**闸内子进程的 stdout/stderr 被丢弃（DEVNULL）**，
-  register 只回报闸名与原因。要看错误输出，必须按本文各闸的"实证自检"命令在任务目录手工裸跑复现。
+  检查只回报闸名与原因。要看错误输出，必须按本文各闸的"实证自检"命令在任务目录手工裸跑复现。
 - **cgroup 降级影响闸门可信度**：闸3/闸5 的内存实测依赖 cgroup `memory.peak`。按 [deployment.md](deployment.md) §1
-  自检；`cgroup DEGRADED` 时实测峰值为 0，闸4 只信申报值，闸5 不再有内存边界，注册需谨慎并在交付说明标注。
+  自检；`cgroup DEGRADED` 时实测峰值为 0，闸4 只信申报值，闸5 不再有内存边界，上线需谨慎并在交付说明标注。
 - 每个非 exempt 任务必须通过 **全部 5 道闸**；`contract_exempt=true` 任务通过 **闸1–4**（无断点能力要求，
   之后只能 manual 触发）。
 
@@ -36,11 +42,12 @@
 6. `outputs.expect[]` 每项相对路径、不含 `..`、不越界（文件允许暂不存在，正式 run 后校验）。
 7. `priority` 为 0–100 整数；`env` 为 string→string，且**不含黑名单键**：
    `LD_PRELOAD/LD_LIBRARY_PATH/LD_AUDIT/LD_DEBUG/PYTHONSTARTUP/PYTHONINSPECT/BASH_ENV/ENV/IFS/PATH`。
-8. `resources`：cpu≥0（float）、memory_mb≥0（int 非 bool）、soft 为 `{字符串: 非负整数}`。
+8. `resources`：cpu≥0（float）、memory_mb≥0（int 非 bool）。**只有 CPU/内存两个字段**；
+   代理/VPN/API 配额等外部资源既不申报也不做容量管理（见闸4 语义要点）。
 9. `heartbeat.timeout_sec` 为整数且 ≥5；`schedule`：
    - `interval`：正整数秒；`start_time/end_time` 为 `HH:MM` 或 `HH:MM:SS` 且**成对出现**；
      weekdays 仅 1–7 整数（1=周一…7=周日）；
-   - `once`：必须带合法 ISO8601 `once_at`（过期时间注册后永不触发，不是闸错误但是配置事故）；
+   - `once`：必须带合法 ISO8601 `once_at`（过期时间上线后永不触发，不是闸错误但是配置事故）；
    - `max_instances` 1–20；`overflow` 仅 `skip/queue`。
 10. `contract_exempt=true` ⇒ `schedule.type` 必须为 `manual`（**单向强制**；反向不成立：manual 任务
     可以且应当具备断点能力，只有真正无法保证数据完整性的任务才标 exempt）。
@@ -55,8 +62,8 @@
 | `contract_exempt=true 只能 manual` | 改 schedule.type=manual，或去掉 exempt（能断点的任务不许用 exempt 逃避抢占） |
 | `interval 必须为正整数秒` / 时间格式错 | 按规格改；纯窗口起点触发用大间隔，不支持省略 interval |
 
-**反作弊约束**：闸1 只证明"声明合法"，不证明行为。不要用注释/多份 task.json 切换来糊弄注册；
-正式运行以注册时同目录文件为准，热加载只重读同一路径。
+**反作弊约束**：闸1 只证明"声明合法"，不证明行为。不要用注释/多份 task.json 切换来糊弄上线检查；
+正式运行以检查通过时同目录文件为准，热加载只重读同一路径。
 
 ## 闸2 · 契约闸 gate2_contract —— 证明任务遵守 SDK 通信契约
 
@@ -70,7 +77,7 @@ SDK 的 `run_task()` 在此环境自动走 `contract_probe()`：写一次合法 
 3. state 对象**同时包含**四个键：`status`、`current_step`、`schema_version`、`resume_point`
    （resume_point 允许是空对象 `{}`，但键必须在；类型须可被 JSON 解析）。
 
-**实证自检（注册前本地先跑，等价于闸2）：**
+**实证自检（上线前本地先跑，等价于闸2）：**
 
 ```bash
 cd tasks/<id> && export SCHED_WORKSPACE=$PWD SCHED_RUN_ID=probe
@@ -84,7 +91,7 @@ cat cache/runs/probe/state.json
   降权用户无权读任务目录（给目录 o+rx 或改为属主用户）、入口路径错。
 - state 缺字段：不要手写探针分支绕过，继承 `SchedTask` 用 `run_task()` 即自动满足；自研入口必须自己
   在探针模式写齐四字段。
-- **探针模式禁止有副作用**（不得写库/发请求/产出 results）：探针会在每次 register 重跑。
+- **探针模式禁止有副作用**（不得写库/发请求/产出 results）：探针会在每次上线检查时重跑。
 
 ## 闸3 · 冒烟闸 gate3_smoke —— 真实执行一轮，测量资源与收敛时间
 
@@ -132,11 +139,14 @@ cat cache/runs/probe/state.json
 
 **语义要点：**
 
-- 这是**硬门禁**：超上限的任务没有"先排队试试"的选项，必须先优化（降内存/限流/拆分数据分片），优化后重新 register。
-- 闸4 只对比**机器上限**，不看当前空闲：即使此刻内存被占满，只要任务不超整机上限就允许注册，
+- 这是**硬门禁**：超上限的任务没有"先排队试试"的选项，必须先优化（降内存/限流/拆分数据分片），优化后等其自动重新检查（改文件立即重检）或手动 register。
+- 闸4 只对比**机器上限**，不看当前空闲：即使此刻内存被占满，只要任务不超整机上限就允许上线，
   运行时排队由准出侧负责。**不要**为了"当前能立刻跑"而把申报调到当下空闲值以下。
-- **软资源不参加闸4**：`resources.soft`（代理并发、API 配额等）容量不足永不拒绝注册，只在运行时令牌排队。
-  但软资源容量必须在交付前用 `set-soft` 配好，否则任务会永久等待（capacity=0）。
+- **外部资源不参加任何闸门，也没有容量配置**：代理隧道/VPN/API 配额等外部资源跨账号、跨协议，
+  调度器无法感知真实占用，统一池化管理没有意义，因此不申报、不设上限、不排队令牌。任务在
+  **正式运行中**遇到这类问题（代理失效、429、配额耗尽、连接失败）时自己快速 `sys.exit(101)`，
+  调度器按指数退避（300s 起，封顶 1h）自动重试；冒烟（dry）路径必须短路这类调用，不允许真碰
+  外部配额（见闸3 失败排查）。
 - 准出时预估还会叠加：画像 P95×overshoot(1.2)、外部进程占用余量（external_safety_margin，默认 512MB）。
   申报要给正常波动留余量，避免每次正式跑都触发超限退让。
 
@@ -170,7 +180,7 @@ cat cache/runs/probe/state.json
 - 信号处理期间不得吞掉 SIGTERM、不得退出码造假；进程组内若拉起孙进程，由任务自己保证孙进程随组退出
   （调度器按进程组发信号）。
 
-**实证自检（注册前在 _dev 完整演练）：**
+**实证自检（上线前在 _dev 完整演练）：**
 
 ```bash
 # 终端1：dry 跑起
@@ -193,14 +203,15 @@ SCHED_DRY_RUN=1 SCHED_RUN_ID=ckpt2 python3 run.py; echo "exit=$?"
 | resume_point 不是对象/为空 | steps 中在每步末正确赋值 dict 并 flush；检查是否写到了别的路径（必须是 cache/resume_point.json 或实例 state） |
 | ckpt2 失败/重跑全部数据 | steps 的 `resume` 入参没消费；起始游标错误；幂等性缺失——按断点设计重写循环 |
 
-## 注册成功后的生效与画像
+## 上线检查通过后的生效与画像
 
-1. register 成功输出 5 行闸结果（exempt 为 4 行），写入 `data/jobs.json`（enabled=true），
-   冒烟实测值写入 `data/runtime/profiles.json` 初始画像。
-2. serve 运行中：≤30s（hot_reload_sec）热加载后出现在 `list`；serve 未运行则下次启动加载。
+1. 五闸全过后写入 `data/jobs.json`（enabled=true），冒烟实测值写入 `data/runtime/profiles.json`
+   初始画像；手动 register 会打印各闸结果（exempt 为 4 行），自动检查通过则只在
+   decisions.jsonl 留 `auto_admit_ok` 审计记录。
+2. serve 运行中：检查通过即纳入调度并出现在 `list`（无需再等热加载）。
 3. `list` 核对：任务 `ok=True`、下次触发时刻正确（manual 显示 `-`）。
 4. 画像会随正式 run 的实测峰值/平均核数自我修正（P95，8 次窗口）；任务数据规模显著增长后应关注
-   `status` 的账本预留/实测对比，必要时更新申报后重新 register。
+   `status` 的账本预留/实测对比，必要时更新申报（热加载即生效，也可 register 立即重跑五闸确认）。
 
 ## 闸门与调试阶段的对应关系
 
@@ -212,4 +223,5 @@ SCHED_DRY_RUN=1 SCHED_RUN_ID=ckpt2 python3 run.py; echo "exit=$?"
 | 闸4 | 对照 `free -m`、`nproc` 核算申报 | 容量规划 |
 | 闸5 | 双终端 TERM→99→恢复跑演练 + 幂等性审计 | 断点设计（最易翻车，重点演练） |
 
-**任何一闸失败后：修任务代码/配置 → 需要时重跑阶段1 等价自检 → 重新 register。不得跳过、不得重复注册施压。**
+**任何一闸失败后：修任务代码/配置 → 需要时重跑阶段1 等价自检 → 保存文件（调度器立即重检）
+或手动 `register <id>`。不得跳过、不得靠反复触发施压。**

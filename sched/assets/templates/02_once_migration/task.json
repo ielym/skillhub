@@ -15,16 +15,25 @@
   "priority": 80,
   "env": {},
   "outputs": {
-    "expect": ["results/backfill_summary.json"]
+    "expect": [
+      "results/backfill_summary.json"
+    ]
   },
   "resources": {
     "cpu": 0.5,
-    "memory_mb": 256,
-    "soft": {}
+    "memory_mb": 256
   },
   "error_rules": {
-    "resource_regex": ["timeout", "connection", "deadlock", "lock wait", "temporarily"],
-    "logic_regex": ["LOGIC:"]
+    "resource_regex": [
+      "timeout",
+      "connection",
+      "deadlock",
+      "lock wait",
+      "temporarily"
+    ],
+    "logic_regex": [
+      "LOGIC:"
+    ]
   },
   "heartbeat": {
     "timeout_sec": 120

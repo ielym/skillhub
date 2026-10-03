@@ -16,16 +16,24 @@
   "priority": 55,
   "env": {},
   "outputs": {
-    "expect": ["results/export.csv"]
+    "expect": [
+      "results/export.csv"
+    ]
   },
   "resources": {
     "cpu": 0.4,
-    "memory_mb": 192,
-    "soft": {}
+    "memory_mb": 192
   },
   "error_rules": {
-    "resource_regex": ["timeout", "connection", "quota", "temporarily"],
-    "logic_regex": ["LOGIC:"]
+    "resource_regex": [
+      "timeout",
+      "connection",
+      "quota",
+      "temporarily"
+    ],
+    "logic_regex": [
+      "LOGIC:"
+    ]
   },
   "heartbeat": {
     "timeout_sec": 180

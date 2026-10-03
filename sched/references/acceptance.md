@@ -12,7 +12,8 @@
 
 - [ ] 任务 id 合法（`^[a-zA-Z0-9_-]{1,64}$`，非 `_/.` 开头），目录名与 id 一致。
 - [ ] 调度类型、interval/窗口、`priority`（按 [workflow.md](workflow.md) 阶段0 分级建议，非默认 0）已定。
-- [ ] 资源预算有数字：CPU 核数、内存 MB、软资源名与每 run 令牌数；来源标注（实测/保守估算）。
+- [ ] 资源预算有数字：CPU 核数、内存 MB（来源标注：实测/保守估算）；外部依赖清单
+      （代理/VPN/第三方 API 配额等）及对应的错误分类（这些走 101，不做容量申报，见 A0 错误分类表）。
 - [ ] 断点字典设计已定：键、粒度（建议单步 ≤20s 工作量）、重放幂等方案。
 - [ ] 错误分类表已定：哪些异常 resource（100/101）、哪些 logic（fail）、哪些数据 skip/110/dead_letter。
 - [ ] 确认任务有限、可断点。若本质上是"不可中断且无法保证数据完整"的工作，
@@ -59,37 +60,44 @@ SCHED_DRY_RUN=1 SCHED_RUN_ID=ckpt2 python3 run.py   # 预期 exit=0 且从断点
 ### A3 调试期间约束（红线复述）
 
 - [ ] 不在正式任务目录调试；不手工触发正式任务。
-- [ ] 需要调度器介导（队列/准出/二刷/画像）时才 `register <id>_dev`；`run <id>_dev` 是**真实执行**，
+- [ ] 需要调度器介导（队列/准出/二刷/画像）时才把任务放进 `tasks/<id>_dev/`（调度器会自动跑
+      五道上线检查，也可 `register <id>_dev` 立即检查）；`run <id>_dev` 是**真实执行**，
       副作用开关已由代码保证关断或目标为安全测试资源。
-- [ ] 机器高负载时不跑 register（闸门会串行拉起最多 4 个进程，冒烟预算取整机内存）。
+- [ ] 机器高负载时不放入新任务/不跑 register（闸门会串行拉起最多 4 个进程，冒烟预算取整机内存）。
 - [ ] 闸失败只改任务，不改 `sched/` 源码、不手改 `data/runtime/`。
 
 ---
 
-## 清单 B · 注册提交门禁（阶段2）
+## 清单 B · 上线提交门禁（阶段2）
 
-### B1 注册前最终自检
+### B1 上线前最终自检
 
 - [ ] cgroup 自检输出 `cgroup OK`（命令见 [deployment.md](deployment.md) §1）；若 DEGRADED：已评估申报可信度并在
       交付说明标注，资源敏感型任务暂缓交付。
 - [ ] runtime.user 在目标机存在（默认 sched-run）；多使用者使用各自独立用户。
 - [ ] 正式 task.json 字段全部显式填实：priority、schedule、resources（非 0、有依据）、heartbeat、
       smoke、error_rules、runtime.user；`contract_exempt` 明确取舍。
-- [ ] `resources.memory_mb` ≥ dry/real 冒烟观测峰值；CPU 申报 ≥ 观测平均核数；软资源令牌数与实际
-      并发占用一致；申报均不超整机（`free -m`、`nproc`）。
-- [ ] 需要的软资源已配置容量：`python3 -m sched status` 能看到且容量 >0。
+- [ ] `resources.memory_mb` ≥ dry/real 冒烟观测峰值；CPU 申报 ≥ 观测平均核数；申报均不超整机
+      （`free -m`、`nproc`）。task.json 中**只有 CPU/内存**——代理/配额等外部资源不写任何容量字段。
+- [ ] 外部资源失败路径已设计：识别错误（代理失效/429/配额/连接失败）后快速 `sys.exit(101)`，
+      任务内不 sleep 死等，调度器按退避自动重试。
 - [ ] 清单 A 全部打勾。
 
-### B2 执行注册（唯一准入动作）
+### B2 上线（五道闸，自动执行；无需手动注册）
+
+把任务目录放到 `tasks/<id>/`（从 `_dev` 改名/复制为正式 id），serve 最迟 30s 内自动开检；
+不想等可手动立即检查：
 
 ```bash
 cd <代码根>
 python3 -m sched register <id>
 ```
 
-- [ ] 5 道闸（exempt 为 4 道）输出全部通过；任一失败 → 按 [gates.md](gates.md) 修复后**整体重跑** register。
-- [ ] 注册后 `python3 -m sched list` 中该任务 `ok=True`；interval/once 任务 `next_run_at` 正确。
-- [ ] serve 在跑则 ≤30s 内热加载生效；未跑则确认交付时 serve 的启动方式（systemd/`serve` 命令）。
+- [ ] 5 道闸（exempt 为 4 道）全部通过；未通过时按 [gates.md](gates.md) 修复并保存文件
+      （文件变化即立即重检，无需等冷却），或修复后重跑 register。
+- [ ] 通过后 `python3 -m sched list` 中该任务 `ok=True`；interval/once 任务 `next_run_at` 正确。
+  自动检查的未通过原因可在 `sched status`、管理台"等待上线检查"区或 `data/runtime/admission.json` 看到。
+- [ ] serve 未运行时任务不会被检查：确认交付时 serve 的启动方式（systemd/`serve` 命令）。
 
 ### B3 提交约束（配置与代码卫生）
 
@@ -97,7 +105,7 @@ python3 -m sched register <id>
 - [ ] 不向任务目录放与本任务无关的文件；不修改其他任务任何文件（隔离铁律）。
 - [ ] **不提交对 `sched/` 调度器源码的改动**；如确有调度器缺陷需求，走独立变更流程：
       先把既有代码/配置推送远端 git 再改，不得借子任务交付夹带。
-- [ ] 不手工改 `data/jobs.json` 来"注册"；注册只能走 register 命令。
+- [ ] 不手工改 `data/jobs.json` 来"上线"任务；准入只能由五道闸自动检查或 register 命令完成。
 
 ---
 
@@ -124,7 +132,9 @@ grep -h '"job_id"' data/runs/<id>.jsonl | tail -5   # 或直接读 jsonl 核对 
 - [ ] 抢占恢复：_dev 上 TERM→99→断点→恢复跑 success 的证据留存（输出/日志），重放幂等已核对。
 - [ ] 资源退让：资源错误注入后 run 落 `resource` 并自动退避重入队、最终成功（或明确仍在退避等待，
       属预期）；退避期间任务未被终止、未丢失。
-- [ ] 软资源（如用）：101 路径演练通过；令牌不足时任务排队等待而非失败；降额/恢复行为符合预期。
+- [ ] 外部资源退让（如任务依赖代理/第三方 API）：故障注入后任务以 101 快速退出、run 落 `resource`
+      并自动按指数退避重入队、最终成功（或明确仍在退避等待，属预期）；退避期间任务未被终止、未丢失。
+      调度器不为这类资源设容量，不存在"配额开关"。
 - [ ] 数据风险（如有跳过面）：110 → `second_pass` 重入队 → pending_skipped 被消费补跑 → success；
       无法补跑的条目已 dead_letter；连续 3 轮仍 110 的转人工路径已知悉。
 - [ ] 逻辑错误：注入逻辑异常时落 `failed`（不重试），等待人工，不产生脏数据。
@@ -135,7 +145,7 @@ grep -h '"job_id"' data/runs/<id>.jsonl | tail -5   # 或直接读 jsonl 核对 
 
 - [ ] 正式首跑后画像更新正常（`data/runtime/profiles.json` 中该任务样本增长，实测峰值非 0；
       若恒为 0，先查 cgroup 委派，不得带疑交付）。
-- [ ] 内存实测峰值 < memory.max（预估×2.5），无 OOM；未观察到持续超限退让；如有偏差已调整申报重注册。
+- [ ] 内存实测峰值 < memory.max（预估×2.5），无 OOM；未观察到持续超限退让；如有偏差已调整 task.json 申报。
 - [ ] 单步耗时/心跳留有安全余量（最长步 ≪ heartbeat.timeout_sec，且 ≪40s 抢占宽限）。
 - [ ] 时间窗任务：窗口边界行为已确认（allow_overrun 取舍符合业务；不会因窗口收口造成意外中断损失）。
 - [ ] max_instances/overflow 与触发频率匹配，不产生无意义的 skip 洪峰或无限 WQ 堆积。
@@ -152,8 +162,9 @@ grep -h '"job_id"' data/runs/<id>.jsonl | tail -5   # 或直接读 jsonl 核对 
       严禁手改 `scheduler_state.json` / `active.json` / `*.jsonl` 来"清理"。
 - [ ] 任务目录无 cache/results 调试残留（或已确认为正式首跑产物）。
 - [ ] 交付说明（向需求方/运维口头或工单均可）至少包含：调度节奏、优先级与理由、资源申报数字与依据、
-      软资源容量需求、断点/幂等设计、错误分类与二刷策略、exempt 与否、cgroup 状态、已知风险/阻塞项。
-- [ ] 运维侧确认：serve 常驻方式、sched-run 用户、软资源容量、settings 参数无人为乱改。
+      外部资源依赖与 101 失败处理（用什么账号/协议由任务自负，调度器仅退避重试）、断点/幂等设计、
+      错误分类与二刷策略、exempt 与否、cgroup 状态、已知风险/阻塞项。
+- [ ] 运维侧确认：serve 常驻方式、sched-run 用户、settings 参数无人为乱改。
 
 ### C5 一票否决项（出现任一，不予验收）
 

@@ -17,7 +17,7 @@
 | entry.cwd | str | "." | 相对工作目录，约束在任务目录内 |
 | schedule.type | enum | "manual" | interval / once / manual |
 | schedule.interval | int | 无 | interval 必填，正整数秒。无窗时首次触发=生效后再过一个 interval（非整点对齐）；带时间窗时对齐窗口起点网格，详见 [configuration.md](configuration.md) |
-| schedule.once_at | str | 无 | once 必填，带时区的 ISO8601；**过去时刻注册后永不触发** |
+| schedule.once_at | str | 无 | once 必填，带时区的 ISO8601；**过去时刻上线后永不触发** |
 | schedule.start_time/end_time | str | 无 | `HH:MM` 或 `HH:MM:SS`，成对出现；end<start 视为跨天 |
 | schedule.weekdays | int[] | [] | 1=周一…7=周日；空=每天 |
 | schedule.allow_overrun | bool | false | false=越过窗口终点立即 cancel（SIGTERM/10s）→ killed 转人工，**不自动续跑**；true=越过窗口也允许跑完 |
@@ -26,9 +26,8 @@
 | priority | int | 0 | **0–100，越大越优先**；决定准出顺序与能否抢占低优 |
 | env | map | {} | string→string；黑名单键拒绝；**不得放密钥** |
 | outputs.expect | str[] | [] | 交付物相对路径；run 成功但任一文件缺失 → 改判 failed |
-| resources.cpu | float | 0 | 单 run 平均核数预算；超整机拒绝注册；0 且无实测=未知被拒 |
-| resources.memory_mb | int | 0 | 单 run 内存上限(MB)；规则同上 |
-| resources.soft | map | {} | `{"软资源名": 每run占用令牌数}`，如 `{"proxy": 1}` |
+| resources.cpu | float | 0 | 单 run 平均核数预算；超整机拒绝上线；0 且无实测=未知被拒 |
+| resources.memory_mb | int | 0 | 单 run 内存上限(MB)；规则同上。**resources 只有这两个字段**；代理/VPN/配额等外部资源不申报（见 §7） |
 | error_rules.resource_regex | str[] | [] | 命中（忽略大小写）异常消息→resource 分类（叠加内置资源模式） |
 | error_rules.logic_regex | str[] | [] | 命中→logic 分类（优先级高于 resource 规则） |
 | heartbeat.timeout_sec | int | 120 | ≥5；state 超过该秒数未更新即判卡死；manual 任务阈值 ×2 |
@@ -76,7 +75,7 @@ tasks/<id>/
 ```
 
 - state.json 与断点均为**原子写 + flock**，可安全被心跳线程与主线程并发写；任务自己的附加文件也要原子写。
-- `cache/`、`results/` 是运行时产物：不应纳入版本提交；注册/运行时自动创建。
+- `cache/`、`results/` 是运行时产物：不应纳入版本提交；上线检查/运行时自动创建。
 - 实例隔离：同一任务多实例（max_instances>1）各写各的 `runs/<run_id>/`；断点文件任务级共享，
   因此**断点内容必须与实例无关、可被任一恢复实例消费**。
 
@@ -156,8 +155,8 @@ oom/quota/temporary 等），都不命中记 **unclassified**（调度器兜底�
 | --- | --- | --- |
 | 0 | 成功（且 outputs.expect 全部存在；缺失改判 failed） | success；进入 success 冷却（默认 60s） |
 | **99** | 干净抢占：断点已保存 | preempted；冷却后**携断点自动重入队**，60s 内不再被抢 |
-| **100** | 资源错误（硬资源/通用资源不足） | resource；退避后重入队，**默认无限重试**。退避序列（代码实际值）：300s→600s→1200s，之后维持 1200s（20 分钟） |
-| **101** | 软资源错误（代理并发/429/配额） | resource；退避 + 向软资源监控报错（窗口内 ≥3 次触发容量减半，冷却 300s 恢复） |
+| **100** | 本机固定资源错误（内存/CPU/磁盘等硬资源或通用资源不足） | resource；退避后重入队，**默认无限重试**。退避序列（代码实际值）：300s→600s→1200s→2400s→封顶 3600s |
+| **101** | 外部资源错误（代理/隧道失效、429 限流、API 配额、连接失败等） | 与 100 同一条退避重试路径；调度器不感知、不池化外部资源，仅按此退出码调整调度 |
 | **110** | 数据风险：跳过项已落 pending_skipped | failed(data_risk)；自动以 `SCHED_TRIGGER=second_pass` 重入队，**最多 3 轮**仍 110 转人工 |
 | 1 | 逻辑错误代表码 | 看 last_error.category：logic → failed 转人工；缺省/unclassified → 兜底按资源重试 |
 | 137 / -9 | SIGKILL 归因 | 三态：cgroup OOM → resource 重试；调度器抢占/取消超时强杀 → preempt_failed 转人工；外部 kill → failed |
@@ -172,7 +171,7 @@ self.state.mark_failed("data_risk", f"{len(ids)} items skipped")  # category 仅
 self.state.flush()
 sys.exit(110)
 
-# 101：明确软资源失败（如代理池 429）
+# 101：外部资源失败（如代理 429 / 隧道失效 / 配额耗尽）
 self.state.mark_failed("resource", "proxy 429")
 self.state.flush()
 sys.exit(101)
@@ -191,7 +190,7 @@ sys.exit(101)
 ### 6.1 抢占/断点
 
 - 触发条件：**严格更低优先级**在跑任务才会入选（同优先级永不互相抢占）；贪心选择最少的低优任务集合
-  释放 CPU/内存/软资源缺口；被选任务 60s 豁免期内不重复被抢。
+  释放 CPU/内存缺口；被选任务 60s 豁免期内不重复被抢。
 - 时序：SIGTERM → 步边界落断点 → exit 99（宽限 40s）→ 调度器记账释放 → 高优准出 → 被抢者重入队。
 - 设计推论：**步长 ≤20s**（留足 flush 与宽限余量）；断点必须是"已完成位点"；续跑循环必须从断点游标开始；
 - 任何一步的副作用在重放时必须幂等（upsert/带幂等键/先查后写）。
@@ -211,22 +210,25 @@ sys.exit(101)
 - 监控：实测内存 > 预估×overload_ratio(2.0) 且持续约 60s → 优雅抢占（99 语义，断点重入队），不是硬杀。
 - 任务侧推论：申报要贴近真实 P95；长期超限说明申报或任务本身有问题，会反复被退让，不要指望超限运行。
 
-## 7. 软资源（时间换空间）
+## 7. 外部资源（代理隧道 / VPN / API 配额）：只按退出码调度，不做容量管理
 
-- 声明：`resources.soft`，按"每 run 消耗几个令牌"申报（如每个 run 占 2 个代理并发就写 2）。
-- 容量：上线前由运维配置：`python3 -m sched set-soft proxy 10`（持久化在 scheduler_state）。
-- 准出：令牌不足时任务**留队等待**（不是失败、不是注册拒绝）；运行中任务因软资源失败应快速 101 退出，
-  调度器退避并在错误密集时自动降额（阈值 3 次/600s → 容量减半下限 1 → 冷却 300s 恢复）。
-- 任务侧不要自己实现代理池排队/长睡眠占坑：**快速 101，把排队交给调度器**。
-- 容量必须 >0：容量 0/未配置 = 永久饥饿；交付验收必须确认所用软资源已配置（`status` 可查）。
+- **为什么不统一管理**：外部资源跨账号、跨协议（IP 隧道与 VPN 无法同口径计量，别的账号占用的资源
+  调度器根本感知不到），混在一起设容量池既不可信也无意义。因此 task.json **没有**这类字段，
+  也没有 set-soft 之类配置命令。
+- **调度器怎么应对**：任务在运行中真实遇到代理失效/429/配额耗尽/连接失败时，先 flush 现场，然后
+  快速 `sys.exit(101)`；调度器按与 100 相同的指数退避（300s→600s→1200s→2400s→封顶 3600s）
+  自动重入队重试，`max_resource_attempts>0` 时到次数转人工。
+- **任务侧纪律**：不要自己实现代理池排队/长睡眠占坑——占着 CPU/内存硬资源死等更糟；**快速 101，
+  把重试节奏交给调度器**。资源的选用、换号、切换协议都由任务自身负责。
+- 冒烟（dry）路径必须短路外部调用，闸3 不接受 101 退出（见 [gates.md](gates.md) 闸3）。
 
 ## 8. 调度器全局参数（data/settings.json，运维侧）
 
 任务作者需要感知的关键默认值：`grace_sec=40`（抢占断点宽限）、`kill_grace_sec=10`（窗口收口/停机
 信号宽限）、`cooldown_sec=60`、`heartbeat_timeout_sec=120`（任务级可调长、manual 运行 ×2）、
-`max_resource_attempts=0`（资源错误不封顶重试）、资源退避 300→600→1200s 维持、
+`max_resource_attempts=0`（资源错误不封顶重试）、资源退避 300→600→1200→2400s 封顶 3600s、
 画像 window=8/overshoot=1.2、cgroup 水位 1.5/2.5、超限额 2.0 持续 60s 退让、
-`preempt_exempt_sec=60`、二刷上限 3、软资源降额 3 次/600s→减半→冷却 300s、`hot_reload_sec=30`。
+`preempt_exempt_sec=60`、二刷上限 3、自动上线检查失败冷却 `auto_admit_retry_sec=300`（改文件立即重试）、`hot_reload_sec=30`。
 
 **全字段、取值影响、调参后果、CLI 确切行为、数据/日志布局、部署步骤** 见
 [configuration.md](configuration.md)。
@@ -240,5 +242,5 @@ sys.exit(101)
 - 捕获所有异常后 `pass` 继续——坏数据静默扩散；应 skip_item 或显式分类失败。
 - dry 模式留真实写操作（发消息/写库/付费 API）——闸3 与调试纪律双重违规。
 - 在任务内 import 兄弟任务目录、读他任务 cache/results——隔离铁律违规。
-- 把代理/连接池当软资源自己排队死等——占着硬资源不让，应快速 101。
+- 把代理/连接池排队逻辑塞进任务自己 sleep 死等——占着硬资源不让，应快速 101 交给调度器退避重试。
 - 用 `contract_exempt=true` 逃避抢占——该标记只给真正无法保证数据完整性的 manual 任务。

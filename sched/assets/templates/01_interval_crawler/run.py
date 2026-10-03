@@ -1,13 +1,13 @@
-"""场景模板 01 · 定时分页采集（interval + 时间窗 + 代理软资源）。
+"""场景模板 01 · 定时分页采集（interval + 时间窗 + 外部资源错误退避）。
 
 要点：
 - 每页是一个可抢占步：处理完一页立即落断点 {"page": n}，被抢占后从下一页继续（重放幂等：用 upsert）。
 - dry 模式零外网：print 模拟；每页保留约 1s 使闸5 的 SIGTERM（默认 1.5s）能命中页处理中。
-- 资源类问题（代理失效/429/连接失败）：立即 sys.exit(101)，不 sleep 死等，排队交给调度器。
+- 外部资源问题（代理失效/429/连接失败/配额耗尽）：立即 sys.exit(101)，不 sleep 死等。
+  调度器不归因、不池化这类资源，只按退出码做指数退避后自动重试（100=本机固定资源，101=外部资源）。
   演练开关 SCHED_DEMO_RESERR=1。
 - 单页内的坏条目：skip_item 落账后本轮继续；本轮结束若有跳过项 → 110 请求二刷；
   second_pass 轮只补跳过项。演练开关 SCHED_DEMO_SKIP=1（条目 item-2）。
-- 部署前置：set-soft proxy <容量>，否则永久排队（见 references/configuration.md）。
 """
 
 from __future__ import annotations

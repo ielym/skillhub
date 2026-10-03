@@ -21,13 +21,13 @@
 
 ## 触发时刻语义（interval / once / manual）
 
-- **interval 无时间窗**：首次触发时刻 = 注册生效（或 serve 启动/热加载 upsert）后**再过一个 interval**，
-  不是"注册后立刻跑一次"，也不按整点对齐；之后每隔 interval 一次。
+- **interval 无时间窗**：首次触发时刻 = 上线生效（或 serve 启动/热加载 upsert）后**再过一个 interval**，
+  不是"上线后立刻跑一次"，也不按整点对齐；之后每隔 interval 一次。
 - **interval 带 start_time/end_time（可带 weekdays）**：触发点对齐到**窗口起点的 interval 网格**
   （如 08:00 起每 3600s → 08:00/09:00/…/22:00）；`end_time < start_time` 视为跨天窗
   （如 22:00–06:00）；weekdays 不填=每天，1=周一…7=周日。
 - **once**：`once_at` 必须是带时区 ISO8601（如 `2026-10-03T20:00:00+08:00`）；
-  **时刻已过 → 永不触发**（list 中 next 显示为空），只能重新 register 或改配置。
+  **时刻已过 → 永不触发**（list 中 next 显示为空），只能改配置后热加载（或 `register` 重检）。
 - **manual**：不自动触发；只能 `run <id>` 入队。注意 manual 任务**同样参与抢占/心跳/资源体系**
   （仅心跳阈值 ×2）；`contract_exempt` 的 manual 任务才不可抢占、不可自动恢复。
 - 热加载保序：运行中改 task.json 不会把未到的触发时刻重置为 now+interval。

@@ -7,6 +7,8 @@
 4. 错误分类（已实测的正确姿势，勿改）：
    - 逻辑错误：raise ValueError("LOGIC: ...")，配合 task.json 的 logic_regex=["LOGIC:"] → exit 1 / failed；
    - 资源不足：state.mark_failed + flush 后 sys.exit(100|101)，快速失败不死等；
+     100=本机固定资源（内存/CPU/磁盘），101=外部资源（代理/隧道/限流/配额）——
+     两者都由调度器指数退避后自动重试，任务无需 sleep 等待；
    - 数据风险：skip_item 落账后 sys.exit(110)，调度器自动二刷（最多 3 轮）；
    - 禁止在 steps() 内调 self.fail(...) 后 return：当前 SDK 会把它覆盖成 exit 0 / success。
 5. 心跳由 SDK 后台线程每 30s 自动 flush；步长保持短小（建议单步 ≤20s），不做无超时的阻塞 IO。

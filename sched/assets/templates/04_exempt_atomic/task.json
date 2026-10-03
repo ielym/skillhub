@@ -16,16 +16,23 @@
   "priority": 90,
   "env": {},
   "outputs": {
-    "expect": ["results/cutover.json"]
+    "expect": [
+      "results/cutover.json"
+    ]
   },
   "resources": {
     "cpu": 0.2,
-    "memory_mb": 96,
-    "soft": {}
+    "memory_mb": 96
   },
   "error_rules": {
-    "resource_regex": ["timeout", "connection", "temporarily"],
-    "logic_regex": ["LOGIC:"]
+    "resource_regex": [
+      "timeout",
+      "connection",
+      "temporarily"
+    ],
+    "logic_regex": [
+      "LOGIC:"
+    ]
   },
   "heartbeat": {
     "timeout_sec": 300

@@ -1,4 +1,4 @@
-# 子任务模板索引（按场景复制，禁止直接注册模板本体）
+# 子任务模板索引（按场景复制，禁止直接把模板本体当正式任务）
 
 > 模板位于 `assets/`，全部**已对真实 SDK 与五道闸等价流程验证通过**（probe=0 / dry 冒烟=0 /
 > 非豁免模板 ckpt TERM→99→恢复=0）。使用方式：
@@ -9,7 +9,7 @@ cp -r <skill目录>/assets/templates/<模板目录> tasks/<你的id>
 # 基础骨架（最小可用）：
 cp -r <skill目录>/assets/skeleton tasks/<你的id>
 # 2) 改 task.json（name/description/schedule/priority/resources/…）与 run.py 业务逻辑
-# 3) 走 acceptance.md 的调试 → register → 验收流程
+# 3) 放进 tasks/ 后调度器自动跑五道上线检查（或 register 立即检查），流程见 acceptance.md
 ```
 
 模板之间刻意**代码复制不共享**（H5 隔离铁律）：复制后该任务与模板、其他任务再无任何依赖关系。
@@ -20,7 +20,7 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
 | 你的场景 | 用哪个 | schedule | priority 参考 | 关键模式 |
 | --- | --- | --- | --- | --- |
 | 还不确定/最小起步 | [skeleton](../assets/skeleton/) | interval（示例） | 40 | 游标断点、skip→110→二刷、原子交付物 |
-| 定时抓取/轮询外部 API，受代理/限流约束 | [01_interval_crawler](../assets/templates/01_interval_crawler/) | interval+时间窗+weekdays | 45 | 分页断点、`soft.proxy`、资源错误快速 101 |
+| 定时抓取/轮询外部 API，受代理/限流约束 | [01_interval_crawler](../assets/templates/01_interval_crawler/) | interval+时间窗+weekdays | 45 | 分页断点、外部资源错误快速 101 退避重试 |
 | 一次性迁移/历史回填，只跑一次 | [02_once_migration](../assets/templates/02_once_migration/) | once（未来时刻！） | 80 | ID 分片断点、逻辑错误 `LOGIC:` 转人工、幂等写 |
 | 人工按需触发的大结果集导出 | [03_manual_report](../assets/templates/03_manual_report/) | manual（可抢占） | 55 | 批次断点 + append 续跑、skip/110、心跳放宽 |
 | 外部原子操作，无法断点/无法重入 | [04_exempt_atomic](../assets/templates/04_exempt_atomic/) | manual + contract_exempt | 90 | **无闸5/不可抢占/崩溃不自动恢复**，极慎用 |
@@ -35,12 +35,13 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
 
 ### 01_interval_crawler — 定时采集
 - 每"页"一个步（约 1s dry sleep 仅供闸5），断点 `{"page": n}`；`_upsert_item` 必须幂等。
-- `resources.soft={"proxy":1}`：上线前必须 `set-soft proxy <n>`，否则**永久排队**。
+- 代理/429 等外部资源问题**无需任何容量配置**：任务直接 exit 101，调度器指数退避后自动重试；
+  不同代理账号/VPN 等由任务自己选用，调度器不感知也不混用管理。
 - 资源失败演示：`SCHED_DEMO_RESERR=1` → exit 101；真实代码里网络超时要设超时、429 直接快速失败，禁止 sleep 死等。
 - 二刷分支只处理 pending_skipped；补不动的进 dead_letter。
 
 ### 02_once_migration — 一次性回填
-- **`once_at` 必须是未来的带时区 ISO8601**；过期=永不触发，注册前再核一次时区。
+- **`once_at` 必须是未来的带时区 ISO8601**；过期=永不触发，上线前再核一次时区。
 - 按 ID chunk（示例 8 行/片），断点 `{"last_id": n}`，目标写入必须 `ON CONFLICT` 幂等。
 - 优先级给高（80）是因为一次性任务通常有时效；跑完后它留在注册表不再触发，确认无误后按 C4 流程清理。
 
@@ -60,7 +61,7 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
 - 低优先级 15：随时给白天任务让路；断点二维 `{"partition": p, "cursor": n}`，每条目 flush。
 - dry 只跑 6 步用于过闸；真实量级 5000/分区是示例常量，按实际替换，单步耗时仍需 ≪120s 心跳。
 
-## 模板自检（复制后、register 前）
+## 模板自检（复制后、上线前）
 
 ```bash
 cd tasks/<id>
