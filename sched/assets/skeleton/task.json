@@ -44,6 +44,11 @@
   "heartbeat": {
     "timeout_sec": 120
   },
+  "retry": {
+    "delay_sec": 0,
+    "max_attempts": 0,
+    "not_after": ""
+  },
   "smoke": {
     "mode": "dry",
     "max_runtime_sec": 60,

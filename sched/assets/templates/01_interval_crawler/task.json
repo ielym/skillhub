@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "name": "crawler-hourly",
-  "description": "场景模板01：工作时间窗内定时采集（分页游标断点/外部资源错误 101 退避重试/坏页 skip→110 二刷）。复制后改名为你的任务 id。",
+  "description": "场景模板01：工作时间窗内定时采集（分页游标断点/外部资源错误 101 立即重排队+retry 段自治节奏/坏页 skip→110 二刷）。复制后改名为你的任务 id。",
   "entry": {
     "file": "run.py",
     "interpreter": "python3",
@@ -50,6 +50,11 @@
   },
   "heartbeat": {
     "timeout_sec": 120
+  },
+  "retry": {
+    "delay_sec": 300,
+    "max_attempts": 0,
+    "not_after": ""
   },
   "smoke": {
     "mode": "dry",

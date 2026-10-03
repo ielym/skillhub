@@ -20,7 +20,7 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
 | 你的场景 | 用哪个 | schedule | priority 参考 | 关键模式 |
 | --- | --- | --- | --- | --- |
 | 还不确定/最小起步 | [skeleton](../assets/skeleton/) | interval（示例） | 40 | 游标断点、skip→110→二刷、原子交付物 |
-| 定时抓取/轮询外部 API，受代理/限流约束 | [01_interval_crawler](../assets/templates/01_interval_crawler/) | interval+时间窗+weekdays | 45 | 分页断点、外部资源错误快速 101 退避重试 |
+| 定时抓取/轮询外部 API，受代理/限流约束 | [01_interval_crawler](../assets/templates/01_interval_crawler/) | interval+时间窗+weekdays | 45 | 分页断点、外部资源错误快速 101 立即重排队（retry 段自治节奏） |
 | 一次性迁移/历史回填，只跑一次 | [02_once_migration](../assets/templates/02_once_migration/) | once（未来时刻！） | 80 | ID 分片断点、逻辑错误 `LOGIC:` 转人工、幂等写 |
 | 人工按需触发的大结果集导出 | [03_manual_report](../assets/templates/03_manual_report/) | manual（可抢占） | 55 | 批次断点 + append 续跑、skip/110、心跳放宽 |
 | 外部原子操作，无法断点/无法重入 | [04_exempt_atomic](../assets/templates/04_exempt_atomic/) | manual + contract_exempt | 90 | **无闸5/不可抢占/崩溃不自动恢复**，极慎用 |
@@ -35,7 +35,8 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
 
 ### 01_interval_crawler — 定时采集
 - 每"页"一个步（约 1s dry sleep 仅供闸5），断点 `{"page": n}`；`_upsert_item` 必须幂等。
-- 代理/429 等外部资源问题**无需任何容量配置**：任务直接 exit 101，调度器指数退避后自动重试；
+- 代理/429 等外部资源问题**无需任何容量配置**：任务直接 exit 101，调度器立即重排队；
+  重试间隔/次数上限/时效在 task.json `retry` 段声明（模板示例 delay_sec=300），
   不同代理账号/VPN 等由任务自己选用，调度器不感知也不混用管理。
 - 资源失败演示：`SCHED_DEMO_RESERR=1` → exit 101；真实代码里网络超时要设超时、429 直接快速失败，禁止 sleep 死等。
 - 二刷分支只处理 pending_skipped；补不动的进 dead_letter。

@@ -21,11 +21,12 @@
 - **H6 资源必须如实申报**：`resources.cpu/memory_mb` 必填且有依据（冒烟实测或保守上限）；声明或实测超整机
   上限、以及两者都为 0（预估未知）闸4 一律拒绝。不得靠低报抢资源——实测持续超限会被优雅抢占，OOM 会被杀并重试。
   代理/VPN/API 配额等外部资源**不属于申报项、调度器也不池化管理**（跨账号/跨协议无法感知真实占用）：
-  任务在运行中按实际错误 `sys.exit(101)` 自分类，调度器据此指数退避重试。
+  任务在运行中按实际错误 `sys.exit(101)` 自分类，调度器立即重排队，重试节奏/上限/时效由任务
+  `retry` 段（delay_sec/max_attempts/not_after）自治。
 - **H7 错误必须真实分类上报**：逻辑错误在 steps 内 `raise ValueError("LOGIC: ...")` 并在 task.json
   `logic_regex` 声明 `"LOGIC:"`（exit 1 + `last_error.category=logic`，转人工不重试）；
   资源不足 `sys.exit(100/101)`、数据风险 `sys.exit(110)`（先 flush 现场），**不要在任务内 sleep 死等资源**；
-  未分类异常（unclassified）一律按资源错误重试，逻辑错误不分类会被无限重试，后果作者自负。
+  未分类异常（unclassified）一律按资源错误立即重排队（受任务 retry 段约束），逻辑错误不分类会被反复重试，后果作者自负。
   **注意：不要在 steps 内调用 `task.fail()` 后 return——会被 SDK 覆盖成 success（实测陷阱，见契约参考）。**
 - **H8 单条坏数据不得卡死整体**：捕获单条数据异常 → `skip_item(id, reason)` 落 pending_skipped → 本轮继续；
   需要二刷时写好跳过项后以 110 退出，由调度器 `second_pass` 重入队补跑；确认无救的条目 `dead_letter()`。

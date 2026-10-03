@@ -76,11 +76,13 @@ SCHED_DRY_RUN=1 SCHED_RUN_ID=ckpt2 python3 run.py   # 预期 exit=0 且从断点
       交付说明标注，资源敏感型任务暂缓交付。
 - [ ] runtime.user 在目标机存在（默认 sched-run）；多使用者使用各自独立用户。
 - [ ] 正式 task.json 字段全部显式填实：priority、schedule、resources（非 0、有依据）、heartbeat、
-      smoke、error_rules、runtime.user；`contract_exempt` 明确取舍。
+      smoke、error_rules、runtime.user；`contract_exempt` 明确取舍；**`retry` 段（delay_sec/
+      max_attempts/not_after）按任务时效与止损要求显式设计**，不盲目用默认值（默认=立即重排、
+      不放弃、无时效）。
 - [ ] `resources.memory_mb` ≥ dry/real 冒烟观测峰值；CPU 申报 ≥ 观测平均核数；申报均不超整机
       （`free -m`、`nproc`）。task.json 中**只有 CPU/内存**——代理/配额等外部资源不写任何容量字段。
 - [ ] 外部资源失败路径已设计：识别错误（代理失效/429/配额/连接失败）后快速 `sys.exit(101)`，
-      任务内不 sleep 死等，调度器按退避自动重试。
+      任务内不 sleep 死等，调度器立即重排队、按任务 retry 段控制节奏。
 - [ ] 清单 A 全部打勾。
 
 ### B2 上线（五道闸，自动执行；无需手动注册）
@@ -93,8 +95,8 @@ cd <代码根>
 python3 -m sched register <id>
 ```
 
-- [ ] 5 道闸（exempt 为 4 道）全部通过；未通过时按 [gates.md](gates.md) 修复并保存文件
-      （文件变化即立即重检，无需等冷却），或修复后重跑 register。
+- [ ] 5 道闸（exempt 为 4 道）全部通过；未通过时按 [gates.md](gates.md) 在本地修复并保存文件
+      （指纹变化即自动重检；闸失败不做定时重试），或修复后重跑 register/管理台「导入任务」。
 - [ ] 通过后 `python3 -m sched list` 中该任务 `ok=True`；interval/once 任务 `next_run_at` 正确。
   自动检查的未通过原因可在 `sched status`、管理台"等待上线检查"区或 `data/runtime/admission.json` 看到。
 - [ ] serve 未运行时任务不会被检查：确认交付时 serve 的启动方式（systemd/`serve` 命令）。
@@ -130,11 +132,14 @@ grep -h '"job_id"' data/runs/<id>.jsonl | tail -5   # 或直接读 jsonl 核对 
 ### C2 恢复与容错能力（取 _dev 证据，正式任务不做破坏演练）
 
 - [ ] 抢占恢复：_dev 上 TERM→99→断点→恢复跑 success 的证据留存（输出/日志），重放幂等已核对。
-- [ ] 资源退让：资源错误注入后 run 落 `resource` 并自动退避重入队、最终成功（或明确仍在退避等待，
-      属预期）；退避期间任务未被终止、未丢失。
+- [ ] 资源退让：资源错误注入后 run 落 `resource` 并**立即重入队**（无全局退避）、最终成功
+      （资源持续不足时持续排队属预期）；等待期间任务未被终止、未丢失。
+- [ ] retry 段行为：`delay_sec>0` 时等待项带 not_before、到点才准出；`max_attempts=N` 时
+      第 N 次仍失败落 giveup 转人工；`not_after`（绝对/每日时刻）过期落 giveup_expired；
+      新计划触发后尝试计数重新从 1 开始。可用故障注入在 _dev 上逐项验证。
 - [ ] 外部资源退让（如任务依赖代理/第三方 API）：故障注入后任务以 101 快速退出、run 落 `resource`
-      并自动按指数退避重入队、最终成功（或明确仍在退避等待，属预期）；退避期间任务未被终止、未丢失。
-      调度器不为这类资源设容量，不存在"配额开关"。
+      并按 retry 段立即/延时重入队、最终成功（或到上限/时效转人工，属预期）；等待期间任务未被
+      终止、未丢失。调度器不为这类资源设容量，不存在"配额开关"。
 - [ ] 数据风险（如有跳过面）：110 → `second_pass` 重入队 → pending_skipped 被消费补跑 → success；
       无法补跑的条目已 dead_letter；连续 3 轮仍 110 的转人工路径已知悉。
 - [ ] 逻辑错误：注入逻辑异常时落 `failed`（不重试），等待人工，不产生脏数据。
@@ -162,8 +167,8 @@ grep -h '"job_id"' data/runs/<id>.jsonl | tail -5   # 或直接读 jsonl 核对 
       严禁手改 `scheduler_state.json` / `active.json` / `*.jsonl` 来"清理"。
 - [ ] 任务目录无 cache/results 调试残留（或已确认为正式首跑产物）。
 - [ ] 交付说明（向需求方/运维口头或工单均可）至少包含：调度节奏、优先级与理由、资源申报数字与依据、
-      外部资源依赖与 101 失败处理（用什么账号/协议由任务自负，调度器仅退避重试）、断点/幂等设计、
-      错误分类与二刷策略、exempt 与否、cgroup 状态、已知风险/阻塞项。
+      外部资源依赖与 101 失败处理（用什么账号/协议由任务自负；retry 段的间隔/上限/时效取值与理由）、
+      断点/幂等设计、错误分类与二刷策略、exempt 与否、cgroup 状态、已知风险/阻塞项。
 - [ ] 运维侧确认：serve 常驻方式、sched-run 用户、settings 参数无人为乱改。
 
 ### C5 一票否决项（出现任一，不予验收）

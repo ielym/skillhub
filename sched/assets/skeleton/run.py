@@ -8,10 +8,12 @@
    - 逻辑错误：raise ValueError("LOGIC: ...")，配合 task.json 的 logic_regex=["LOGIC:"] → exit 1 / failed；
    - 资源不足：state.mark_failed + flush 后 sys.exit(100|101)，快速失败不死等；
      100=本机固定资源（内存/CPU/磁盘），101=外部资源（代理/隧道/限流/配额）——
-     两者都由调度器指数退避后自动重试，任务无需 sleep 等待；
+     两者都由调度器立即重排队（无全局退避），重试节奏由 task.json 的 retry 段自治
+     （delay_sec 间隔 / max_attempts 上限 / not_after 时效；运行中还可调
+     self.set_retry_hint(...) 按当天情况收紧），任务自己不要 sleep 占坑等待；
      注意：换个连接/换个出口 IP 就可能恢复的瞬时故障（连接重置、响应截断、
      IncompleteRead）必须先在步骤内快速重试 3~4 次（新连接、间隔几秒递增），
-     只有连续失败才 exit 101——一次抖动就 101 会白等一个小时；
+     只有连续失败才 exit 101——一次抖动就 101 且 delay=0 会造成高频空转；
    - 数据风险：skip_item 落账后 sys.exit(110)，调度器自动二刷（最多 3 轮）；
    - 禁止在 steps() 内调 self.fail(...) 后 return：当前 SDK 会把它覆盖成 exit 0 / success。
 5. 心跳由 SDK 后台线程每 30s 自动 flush；步长保持短小（建议单步 ≤20s），不做无超时的阻塞 IO。

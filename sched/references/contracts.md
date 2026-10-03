@@ -31,6 +31,9 @@
 | error_rules.resource_regex | str[] | [] | 命中（忽略大小写）异常消息→resource 分类（叠加内置资源模式） |
 | error_rules.logic_regex | str[] | [] | 命中→logic 分类（优先级高于 resource 规则） |
 | heartbeat.timeout_sec | int | 120 | ≥5；state 超过该秒数未更新即判卡死；manual 任务阈值 ×2 |
+| retry.delay_sec | int | 0 | 资源错误（100/101/未分类）后自动重入队的最早准出间隔（秒）。0=立即重排队（默认）；正整数=等待项带 not_before 到点才参与准出 |
+| retry.max_attempts | int | 0 | 本次计划触发的最大尝试次数（含首次）。**0=不放弃**（默认，有资源必须跑完）；正整数 N=第 N 次仍资源错误则转人工（giveup）；新计划触发计数重新从 1 开始 |
+| retry.not_after | str | "" | 自动重试时效截止：ISO8601 绝对时刻（`2026-10-04T15:00:00+08:00`）或每日时刻 `HH:MM`（每天此刻之后放弃，giveup_expired）；运行中可被 SDK `set_retry_hint()` 收紧 |
 | smoke.mode | enum | "dry" | dry=冒烟注入 SCHED_DRY_RUN=1；real=真实执行冒烟 |
 | smoke.max_runtime_sec | int | 60 | 冒烟收敛时限 |
 | smoke.signal_after_sec | float | 1.5 | 闸5 起跑后多久发 SIGTERM（步骤慢的任务调大，如 3–5） |
@@ -47,7 +50,7 @@ env 黑名单（出现即闸1 失败）：`LD_PRELOAD`、`LD_LIBRARY_PATH`、`LD
 | SCHED_JOB_ID | 任务 id |
 | SCHED_RUN_ID | 运行实例 id（如 `20261003T120000-a1b2c3d4`）；决定实例级状态目录；本地裸跑时缺省为 `local` |
 | SCHED_TRIGGER | `manual` / `interval` / `once` / `second_pass`（110 二刷）/ `contract`（闸门期） |
-| SCHED_ATTEMPT | 第几次尝试（资源退避重试递增） |
+| SCHED_ATTEMPT | 第几次尝试（同一计划触发内资源错误重试递增；1=首次） |
 | SCHED_SCHEDULED_AT | 本次调度时刻 ISO |
 | SCHED_WORKSPACE | 任务目录绝对路径，所有产物的根 |
 | SCHED_DRY_RUN | `1`=冒烟/dry（禁止真实副作用）；`0`=正式 |
@@ -122,6 +125,7 @@ if __name__ == "__main__":
 | `dry_run` 属性 | bool，读 SCHED_DRY_RUN；dry 下所有真实副作用必须短路 |
 | `skip_item(item_id, reason)` | 追加 pending_skipped（同 item 自动去重），不中断本轮 |
 | `read_pending_skipped()` | 读跳过项列表；second_pass 轮（SCHED_TRIGGER）消费补跑 |
+| `set_retry_hint(delay_sec=None, max_attempts=None, not_after=None)` | 运行中按当天实际情况收紧重试策略（如半日市 11:30 后不再重试）；写入实例 state，调度器重排队决策时与 task.json `retry` 段合并：缺省字段回落静态声明，非法值整体忽略 |
 | `dead_letter(item_id, reason)` | 写死信，明确放弃 |
 | `resource() / logic()` | 分类辅助字符串（"resource"/"logic"） |
 | `run_task(task)` | 入口：PROBE 环境自动自检；否则运行 steps；托管 SIGTERM/SIGINT |
@@ -153,14 +157,14 @@ oom/quota/temporary 等），都不命中记 **unclassified**（调度器兜底�
 
 | 退出码 | 含义 | 调度器终态与后继动作 |
 | --- | --- | --- |
-| 0 | 成功（且 outputs.expect 全部存在；缺失改判 failed） | success；进入 success 冷却（默认 60s） |
-| **99** | 干净抢占：断点已保存 | preempted；冷却后**携断点自动重入队**，60s 内不再被抢 |
-| **100** | 本机固定资源错误（内存/CPU/磁盘等硬资源或通用资源不足） | resource；退避后重入队，**默认无限重试**。退避序列（代码实际值）：300s→600s→1200s→2400s→封顶 3600s |
-| **101** | 外部资源错误（代理/隧道失效、429 限流、API 配额、连接失败等） | 与 100 同一条退避重试路径；调度器不感知、不池化外部资源，仅按此退出码调整调度 |
+| 0 | 成功（且 outputs.expect 全部存在；缺失改判 failed） | success；不冷却，按 schedule 等下一次计划触发 |
+| **99** | 干净抢占：断点已保存 | preempted；**立即携断点重入队**（受 preempt_exempt_sec=60s 豁免，期内不再被抢） |
+| **100** | 本机固定资源错误（内存/CPU/磁盘等硬资源或通用资源不足） | resource；**立即重入队**（无全局退避），重试节奏/上限/时效由任务 `retry` 段自治：delay_sec>0 带 not_before 等待；到 max_attempts 转人工（giveup）；not_after 过期转人工（giveup_expired）。默认 delay=0/max=0/无截止=有资源就一直跑 |
+| **101** | 外部资源错误（代理/隧道失效、429 限流、API 配额、连接失败等） | 与 100 同一条立即重排队路径，同受任务 `retry` 段约束；调度器不感知、不池化外部资源，仅按此退出码调整调度 |
 | **110** | 数据风险：跳过项已落 pending_skipped | failed(data_risk)；自动以 `SCHED_TRIGGER=second_pass` 重入队，**最多 3 轮**仍 110 转人工 |
-| 1 | 逻辑错误代表码 | 看 last_error.category：logic → failed 转人工；缺省/unclassified → 兜底按资源重试 |
-| 137 / -9 | SIGKILL 归因 | 三态：cgroup OOM → resource 重试；调度器抢占/取消超时强杀 → preempt_failed 转人工；外部 kill → failed |
-| 其他非 0 | 未知 | 有任务自报分类按分类；无自报一律按资源重试（宁重试不错杀） |
+| 1 | 逻辑错误代表码 | 看 last_error.category：logic → failed 转人工；缺省/unclassified → 兜底按资源错误立即重排队（受 retry 段约束） |
+| 137 / -9 | SIGKILL 归因 | 三态：cgroup OOM → resource 立即重排队；调度器抢占/取消超时强杀 → preempt_failed 转人工；外部 kill → failed |
+| 其他非 0 | 未知 | 有任务自报分类按分类；无自报一律按资源错误立即重排队（宁重试不错杀） |
 
 **101/110 的当前用法（SDK 未封装一键退出码）**：先写好状态/跳过项，再裸退出：
 
@@ -182,7 +186,7 @@ sys.exit(101)
 
 **逻辑错误必须显式化**：`raise ValueError("LOGIC: 券面校验失败: ...")` 并在 task.json
 `error_rules.logic_regex` 写 `"LOGIC:"`。未命中任何分类规则的异常（unclassified，exit 1）即便真是
-逻辑 bug 也会被兜底机制当资源错误无限退避重试；这是机制倒逼，不是宽松。
+逻辑 bug 也会被兜底机制当资源错误立即重排队（受 retry 段约束）；这是机制倒逼，不是宽松。
 （再次提醒：在 steps 里调 `self.fail(...)` 然后 return 会被覆盖成 exit 0/success，禁止这样写。）
 
 ## 6. 三大运行期契约
@@ -216,26 +220,30 @@ sys.exit(101)
   调度器根本感知不到），混在一起设容量池既不可信也无意义。因此 task.json **没有**这类字段，
   也没有 set-soft 之类配置命令。
 - **调度器怎么应对**：任务在运行中真实遇到代理失效/429/配额耗尽/连接失败时，先 flush 现场，然后
-  快速 `sys.exit(101)`；调度器按与 100 相同的指数退避（300s→600s→1200s→2400s→封顶 3600s）
-  自动重入队重试，`max_resource_attempts>0` 时到次数转人工。
+  快速 `sys.exit(101)`；调度器**立即重排队**（无全局退避），下一轮准出资源够就再跑；要不要间隔、
+  最多试几次、几点后放弃，全部由任务 task.json `retry` 段声明（或运行中 `set_retry_hint()`
+  收紧）。
 - **任务侧纪律（两层重试，各司其职）**：
   1. **瞬时单连接故障先就地快速重试**：隧道代理每次连接自动换出口 IP，传输中途被掐断
      （IncompleteRead、响应 JSON 截断、偶发连接重置）发生率很高且与具体 IP/连接相关。
      对这类"换个连接可能就好"的错误，任务应在**同一步骤内**重试 3~4 次（间隔 2/4/8s
      递增，每次新连接换新 IP），幂等步骤可安全重放；
   2. **连续失败才快速 101**：重试全部失败说明资源在一段时间内确定性不可用，立即 flush 后
-     `sys.exit(101)`，把长节奏交给调度器退避。一次抖动就 101 = 白白等一小时，属于 bug。
+     `sys.exit(101)`，把节奏交给自身 retry 段（如 `delay_sec=300` 等 5 分钟、
+     `max_attempts=8` 止损、半日任务 `not_after="11:30"`）。一次抖动就 101 且 delay=0
+     会导致高频空转，属于 bug。
   不要做的是：代理池排队、长睡眠占坑死等——占着 CPU/内存硬资源不放手更糟。
   资源的选用、换号、切换协议都由任务自身负责。
 - 冒烟（dry）路径必须短路外部调用，闸3 不接受 101 退出（见 [gates.md](gates.md) 闸3）。
 
 ## 8. 调度器全局参数（data/settings.json，运维侧）
 
-任务作者需要感知的关键默认值：`grace_sec=40`（抢占断点宽限）、`kill_grace_sec=10`（窗口收口/停机
-信号宽限）、`cooldown_sec=60`、`heartbeat_timeout_sec=120`（任务级可调长、manual 运行 ×2）、
-`max_resource_attempts=0`（资源错误不封顶重试）、资源退避 300→600→1200→2400s 封顶 3600s（起始/封顶可在管理台总览面板热更新）、
-画像 window=8/overshoot=1.2、cgroup 水位 1.5/2.5、超限额 2.0 持续 60s 退让、
-`preempt_exempt_sec=60`、二刷上限 3、自动上线检查失败冷却 `auto_admit_retry_sec=300`（改文件立即重试）、`hot_reload_sec=30`。
+任务作者需要感知的关键默认值：`grace_sec=40`（抢占断点宽限）、`kill_grace_sec=10`（窗口收口/停机/
+手动停止信号宽限）、`heartbeat_timeout_sec=120`（任务级可调长、manual 运行 ×2）、
+**无成功冷却/无全局资源退避/无全局重试上限**——资源错误立即重排队，节奏由任务 `retry` 段
+（delay_sec/max_attempts/not_after）自治；
+画像 window=8/overshoot=1.2、运行中动态画像每 60s 采样落盘、cgroup 水位 1.5/2.5、超限额 2.0 持续 60s 退让、
+`preempt_exempt_sec=60`、二刷上限 3、闸失败**不做定时重试**（改/删任务文件后按新指纹自动重检）、`hot_reload_sec=30`。
 
 **全字段、取值影响、调参后果、CLI 确切行为、数据/日志布局、部署步骤** 见
 [configuration.md](configuration.md)。
@@ -249,5 +257,5 @@ sys.exit(101)
 - 捕获所有异常后 `pass` 继续——坏数据静默扩散；应 skip_item 或显式分类失败。
 - dry 模式留真实写操作（发消息/写库/付费 API）——闸3 与调试纪律双重违规。
 - 在任务内 import 兄弟任务目录、读他任务 cache/results——隔离铁律违规。
-- 把代理/连接池排队逻辑塞进任务自己 sleep 死等——占着硬资源不让，应快速 101 交给调度器退避重试。
+- 把代理/连接池排队逻辑塞进任务自己 sleep 死等——占着硬资源不让，应快速 101 交给调度器立即重排队（间隔用 retry.delay_sec 表达，不要占着进程睡）。
 - 用 `contract_exempt=true` 逃避抢占——该标记只给真正无法保证数据完整性的 manual 任务。

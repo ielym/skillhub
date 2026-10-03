@@ -9,13 +9,14 @@
 | gate3 冒烟超时 | dry 路径没在 `smoke.max_runtime_sec` 内收敛；检查死循环/网络硬等待，dry 必须无真实 IO 等待 |
 | gate4 预估未知拒绝 | 声明 0 且 cgroup 实测 0；先按保守上限填 `resources.memory_mb`，并排查 cgroup 是否降级（自检见 [deployment.md](deployment.md)） |
 | gate5 打断后不是 99 / 恢复跑失败 | 步太长、SIGTERM 后没落断点、或恢复未消费 resume_point 导致重跑；缩短步长，每步末 flush |
-| run 状态 `resource` | 100/101 或未分类错误，退避中；看 `data/runs/<id>.jsonl` 的 reason 与 stderr，资源类属正常退让 |
+| run 状态 `resource` | 100/101 或未分类错误，已立即重排队；看 `data/runs/<id>.jsonl` 的 reason 与 stderr，资源类属正常退让。重试间隔/上限/时效由任务 `retry` 段控制（delay_sec 使等待项显示 not_before；到 max_attempts 记 giveup、过 not_after 记 giveup_expired 并转人工） |
 | run 状态 `preempted` | 正常的高优先抢，断点已存，自动重入队；频繁被抢说明优先级给低了或申报偏大 |
 | run 状态 `preempt_failed` | 40s 内没退出被 SIGKILL，断点未确认，转人工；必须缩短步长/优化信号响应 |
 | run 状态 `failed` | 逻辑错误或交付物缺失；交付物缺失查 outputs.expect 路径（相对任务目录） |
-| `killed` 且原因含心跳超时 | 单步阻塞超 heartbeat.timeout_sec；拆小步、保持 SDK 心跳（勿在心跳线程外长期阻塞 IO） |
-| `status` 里 waiting 长期不动 | `status` 查账本余量与未通过上线检查项；常见原因：资源申报超剩余（正常排队，等高优/在途释放）、处于 backoff/cooldown（101 外部资源错误按 300s→1h 退避，属正常等待，到点自动重试）。外部资源没有容量开关可配 |
-| 新任务放进 tasks/ 后一直不出现 | serve 未运行（自动检查只在 serve 内执行）；或检查未通过——看 `status`/管理台"等待上线检查"区/admission.json 的失败原因；冷却中改一次文件即可立即重试 |
+| `killed` 且原因含心跳超时 | 单步阻塞超 heartbeat.timeout_sec；拆小步、保持 SDK 心跳（勿在心跳线程外长期阻塞 IO）。首次心跳超时自动重入队 1 次，连续第二次转人工 |
+| `killed` 且原因为手动停止 | 管理台「停止」或运维人工介入；本轮不自动重排队，处理后在管理台手动触发（断点仍可续跑） |
+| `status` 里 waiting 长期不动 | `status` 查账本余量与未通过上线检查项；常见原因：资源申报超剩余（正常排队，等高优/在途释放）、等待项 not_before 未到（任务 `retry.delay_sec` 声明的间隔）、已 giveup 转人工（队列中不再出现，去历史看原因）。外部资源没有容量开关可配 |
+| 新任务放进 tasks/ 后一直不出现 | serve 未运行（自动检查只在 serve 内执行）；或检查未通过——看 `status`/管理台"等待上线检查"区/admission.json 的失败原因；**闸失败不自动重试**，在本地改一次任务文件（或删掉目录重放）即按新指纹重检，也可管理台「导入任务」/`register` 立即检查 |
 | list 中任务 `ok=false` | task.json 非法或入口缺失；修复后下次热加载（≤30s）自动恢复 |
 
 五道闸逐条判定标准见 [gates.md](gates.md)；字段/退出码细节见 [contracts.md](contracts.md)；
