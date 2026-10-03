@@ -48,6 +48,9 @@
     retry 三字段），写 task.json（0644、保属主）后立即生效（WQ 优先级即时重排）；
   - **停止运行中 run**：cancel Event → SIGTERM 整组（10s 宽限），killed 转人工、本轮不
     自动重排队（断点保留，可再手动触发续跑）；
+  - **查看运行中日志**：队列页运行中行「日志」直接读 data/runs 下实时落盘的
+    stdout/stderr（子进程强制 PYTHONUNBUFFERED + 泵逐块 flush），支持 3s 自动刷新；
+    任务若把详细日志写在自身 `cache/logs/` 则标准输出可能为空；
   - **删除历史**：弹窗二选一——仅删 jsonl 记录，或连带删 `data/runs/<job>/<run_id>.
     {stdout,stderr}.log`；运行中的 run 拒删（409）。
 - **管理台不提供任务文件查看/编辑**：所有代码与 task.json 变更都在本地完成、经热加载/
