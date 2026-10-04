@@ -46,10 +46,13 @@
    `LD_PRELOAD/LD_LIBRARY_PATH/LD_AUDIT/LD_DEBUG/PYTHONSTARTUP/PYTHONINSPECT/BASH_ENV/ENV/IFS/PATH`。
 8. `resources`：cpu≥0（float）、memory_mb≥0（int 非 bool）。**只有 CPU/内存两个字段**；
    代理/VPN/API 配额等外部资源既不申报也不做容量管理（见闸4 语义要点）。
-9. `heartbeat.timeout_sec` 为整数且 ≥5；`schedule`：
-   - `interval`：正整数秒；`start_time/end_time` 为 `HH:MM` 或 `HH:MM:SS` 且**成对出现**；
-     weekdays 仅 1–7 整数（1=周一…7=周日）；
-   - `once`：必须带合法 ISO8601 `once_at`（过期时间上线后永不触发，不是闸错误但是配置事故）；
+9. `heartbeat.timeout_sec` 为整数且 ≥5；`schedule`（讨论二两值模型）：
+   - `type` 仅 `manual` / `auto`；
+   - `auto` 类型必须带正整数 `interval`（给机会的最小间隔秒数）；
+   - 旧字段 `start_time/end_time/weekdays/once_at/allow_overrun` 已废弃，
+     ScheduleSpec model_config extra=ignore 会静默忽略不报错，但**闸1 不再校验它们**，
+     精确时机（法定节假日、每月特定日期等）由任务 SDK `reschedule(delay_sec)` + `exit_skip()`
+     自行判断；
    - `max_instances` 1–20；`overflow` 仅 `skip/queue`。
 10. `contract_exempt=true` ⇒ `schedule.type` 必须为 `manual`（**单向强制**；反向不成立：manual 任务
     可以且应当具备断点能力，只有真正无法保证数据完整性的任务才标 exempt）。
@@ -64,7 +67,7 @@
 | `interpreter 非法（只能是命令名）` | 写 `python3` 而非 `/usr/bin/python3` |
 | `env 键在安全黑名单中` | 删除 PATH/LD_* 等键；需要自定义环境用别的键名 |
 | `contract_exempt=true 只能 manual` | 改 schedule.type=manual，或去掉 exempt（能断点的任务不许用 exempt 逃避抢占） |
-| `interval 必须为正整数秒` / 时间格式错 | 按规格改；纯窗口起点触发用大间隔，不支持省略 interval |
+| `interval 必须为正整数秒` / auto 类型缺 interval | auto 类型必须填 interval（给机会的最小间隔）；manual 类型 interval 忽略 |
 
 **反作弊约束**：闸1 只证明"声明合法"，不证明行为。不要用注释/多份 task.json 切换来糊弄上线检查；
 正式运行以检查通过时同目录文件为准，热加载只重读同一路径。

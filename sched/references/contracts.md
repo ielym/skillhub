@@ -15,12 +15,12 @@
 | entry.interpreter | str\|null | "python3" | 仅命令名（无路径无空格）；null 表示直接执行，入口须有 x 权限 |
 | entry.args | str[] | [] | 命令行参数，元素必须都是字符串 |
 | entry.cwd | str | "." | 相对工作目录，约束在任务目录内 |
-| schedule.type | enum | "manual" | interval / once / manual |
-| schedule.interval | int | 无 | interval 必填，正整数秒。无窗时首次触发=生效后再过一个 interval（非整点对齐）；带时间窗时对齐窗口起点网格，详见 [configuration.md](configuration.md) |
-| schedule.once_at | str | 无 | once 必填，带时区的 ISO8601；**过去时刻上线后永不触发** |
-| schedule.start_time/end_time | str | 无 | `HH:MM` 或 `HH:MM:SS`，成对出现；end<start 视为跨天 |
-| schedule.weekdays | int[] | [] | 1=周一…7=周日；空=每天 |
-| schedule.allow_overrun | bool | false | false=越过窗口终点立即 cancel（SIGTERM/10s）→ killed 转人工，**不自动续跑**；true=越过窗口也允许跑完 |
+| schedule.type | enum | "manual" | **manual**（仅手动/CLI 触发，永不自动给机会）/ **auto**（自动给机会，interval 控节奏）。旧 interval/once 值加载时自动按 auto/manual 兼容 |
+| schedule.interval | int | 无 | auto 类型时必填，正整数秒 = **给机会的最小间隔**。调度器只做 coarse 节流，精确时机（法定节假日、每月特定日期、收盘后等）由任务进程内用 SDK `reschedule(delay_sec)` + `exit_skip()` 自行判断 |
+| ~~schedule.once_at~~ | str | 无 | **已废弃**（讨论二）；旧 task.json 含此字段静默忽略，永不生效 |
+| ~~schedule.start_time/end_time~~ | str | 无 | **已废弃**；旧字段静默忽略 |
+| ~~schedule.weekdays~~ | int[] | [] | **已废弃**；旧字段静默忽略 |
+| ~~schedule.allow_overrun~~ | bool | false | **已废弃**（调度器不再做窗口收口，窗口边界终止功能整体移除）；旧字段静默忽略 |
 | schedule.max_instances | int | 1 | 1–20，同任务在途（等待+运行）实例上限 |
 | schedule.overflow | enum | "skip" | skip=触发时满员直接跳过；queue=入队等待 |
 | priority | int | 0 | **0–100，越大越优先**；决定准出顺序与能否抢占低优 |
@@ -49,7 +49,7 @@ env 黑名单（出现即闸1 失败）：`LD_PRELOAD`、`LD_LIBRARY_PATH`、`LD
 | --- | --- |
 | SCHED_JOB_ID | 任务 id |
 | SCHED_RUN_ID | 运行实例 id（如 `20261003T120000-a1b2c3d4`）；决定实例级状态目录；本地裸跑时缺省为 `local` |
-| SCHED_TRIGGER | `manual` / `interval` / `once` / `second_pass`（110 二刷）/ `contract`（闸门期） |
+| SCHED_TRIGGER | `manual` / `auto` / `second_pass`（110 数据风险二刷）/ `schedule_skip`（102 调度跳过重排队）/ `contract`（闸门期）|
 | SCHED_ATTEMPT | 第几次尝试（同一计划触发内资源错误重试递增；1=首次） |
 | SCHED_SCHEDULED_AT | 本次调度时刻 ISO |
 | SCHED_WORKSPACE | 任务目录绝对路径，所有产物的根 |

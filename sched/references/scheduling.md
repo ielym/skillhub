@@ -1,6 +1,6 @@
 # 调度语义（写代码前必须内化）
 
-> 抢占、排队、窗口、触发时刻的确切行为。任务设计与排障都以此为准；
+> 抢占、排队、触发、SDK 自治时机的确切行为。任务设计与排障都以此为准；
 > 相关参数见 [configuration.md](configuration.md)。
 
 ## 运行期调度行为
@@ -22,23 +22,51 @@
   （断点自动重入队）和心跳超时的 killed（重入队 1 次，第二次转人工）。
 - **见缝插针**：大任务暂时放不下时，能放进剩余资源的小任务会先跑。任务启动开销应尽量小、申报应尽量准。
 - **手动触发不是特权**：非 exempt 的 manual 任务与自动任务遵守同一套抢占、心跳（超时阈值放宽 2 倍）、超限规则。
-- **时间窗收口会终止任务且不自动续跑**：`allow_overrun=false`（默认）时，一旦运行越过窗口终点
-  （`end_time`，支持跨天窗），调度器立即对进程组发 SIGTERM（cancel 宽限仅 **10s**），
-  终态记 `killed` 并**转人工，不携断点自动重入队**（这是收口语义，区别于抢占的 40s+99 续跑）。
-  因此运行时长不可控的任务必须设 `allow_overrun=true`，**不要用窗口收口当"兜底杀"**，
-  也不要把必须跑完的任务放进明显小于其运行时长的窗口。
 
-## 触发时刻语义（interval / once / manual）
+## 触发时刻语义（manual / auto）
 
-- **interval 无时间窗**：首次触发时刻 = 上线生效（或 serve 启动/热加载 upsert）后**再过一个 interval**，
-  不是"上线后立刻跑一次"，也不按整点对齐；之后每隔 interval 一次。
-- **interval 带 start_time/end_time（可带 weekdays）**：触发点对齐到**窗口起点的 interval 网格**
-  （如 08:00 起每 3600s → 08:00/09:00/…/22:00）；`end_time < start_time` 视为跨天窗
-  （如 22:00–06:00）；weekdays 不填=每天，1=周一…7=周日。
-- **once**：`once_at` 必须是带时区 ISO8601（如 `2026-10-03T20:00:00+08:00`）；
-  **时刻已过 → 永不触发**（list 中 next 显示为空），只能改配置后热加载（或 `register` 重检）。
-- **manual**：不自动触发；只能 `run <id>` 入队。注意 manual 任务**同样参与抢占/心跳/资源体系**
-  （仅心跳阈值 ×2）；`contract_exempt` 的 manual 任务才不可抢占、不可自动恢复。
-- 热加载保序：运行中改 task.json 不会把未到的触发时刻重置为 now+interval。
+【讨论二 两值模型】调度器只做**粗颗粒节流**，精确时机判断全部下放任务进程内。
+
+- **auto**：调度器按 `interval`（秒）给机会（`next_fire = now + interval`）。
+  不做任何时间窗/星期/单次时刻判定——任务收到机会后，进程内自行判断"今天该不该跑"
+  （法定节假日、每月特定日期、收盘后无意义等）：
+  ```python
+  # 任务 steps 开头示例：
+  if today in HOLIDAYS or not self._should_run(today):
+      self.reschedule(delay_sec=3600)  # 写 state.retry_hint.delay_sec=3600
+      return self.exit_skip()          # exit_code=102，调度器转 not_before 重排队
+  ```
+  `reschedule(delay_sec)` 别名 `set_retry_hint(delay_sec=...)`，`exit_skip()` 设
+  state.status=success 后以 102 退出。调度器读 `state_snapshot.retry_hint.delay_sec`
+  → resolve_retry 合并 → 转 WQ 等待项的 `not_before`，到点后下一轮再给机会。
+  attempt **不递增**（"跳过本轮"不是"重试失败"），**不受 max_attempts/not_after 限制**。
+  任务进程内纠错/回扫节奏也用 reschedule 声明，和 retry 段（处理资源错误/逻辑错误的重试）
+  走同一条 resolve_retry 合并路径。
+- **manual**：调度器**永不自动给机会**；只能 `run <id>` 或管理台「立即运行一次」入队。
+  注意 manual 任务**同样参与抢占/心跳/资源体系**（仅心跳阈值 ×2）；
+  `contract_exempt` 的 manual 任务才不可抢占、不可自动恢复。
+- 热加载保序：运行中改 task.json（或 serve 重启）不会把未到的 auto 触发时刻重置为 now+interval。
 - 到点时在途实例已达 `max_instances`：`overflow=skip` 本次跳过（记 decisions 日志）；
   `queue` 照常入队排队。跳过/排队都不算失败。
+
+### 已废弃字段（讨论二移除，旧 task.json 含这些字段时静默忽略）
+
+| 废弃字段 | 旧语义 | 新做法 |
+| --- | --- | --- |
+| ~~once_at~~ | 单次时刻到期触发一次 | auto + interval 或 manual，时机判断放 SDK |
+| ~~start_time / end_time~~ | 每日时间窗 | 任务 SDK 内部判断窗口（可任意不规则） |
+| ~~weekdays~~ | 星期生效 | 任务 SDK 内部判断（支持法定节假日日历等） |
+| ~~allow_overrun~~ | 越过窗口终点终止 | 窗口收口功能整体移除，调度器不再终止窗口外运行 |
+
+## 退出码协议（任务 ↔ 调度器）
+
+| 退出码 | 分类 | 调度器后续 |
+| --- | --- | --- |
+| 0（success） | — | 成功完结，auto 类 engine 继续按 interval 算下次给机会 |
+| 99（PREEMPTED） | preempted | 断点保存 → 重入队、60s 豁免期 |
+| 100（RESOURCE） | resource | retry 段自治重排队 |
+| 101（EXTERNAL_RESOURCE） | resource | retry 段自治重排队（外部资源指数退避节奏由 SDK delay_sec 声明）|
+| **102（SKIP_SCHEDULE）** | — | **跳过本轮 N 秒后再给机会**。attempt 不递增，不受 retry.max_attempts/not_after 限制；delay_sec 来自 SDK reschedule() 或 retry.delay_sec |
+| 110（DATA_RISK） | logic | data_risk 二刷闭环（有上限） |
+| 137（SIGKILL） | 待归因 | 人工排查 |
+| 其他非 0（含 1） | unclassified | G5 兜底按 resource 重试（倒逼显式分类）|
