@@ -97,7 +97,7 @@ python3 -m sched register <id>
 
 - [ ] 5 道闸（exempt 为 4 道）全部通过；未通过时按 [gates.md](gates.md) 在本地修复并保存文件
       （指纹变化即自动重检；闸失败不做定时重试），或修复后重跑 register/管理台「导入任务」。
-- [ ] 通过后 `python3 -m sched list` 中该任务 `ok=True`；interval/once 任务 `next_run_at` 正确。
+- [ ] 通过后 `python3 -m sched list` 中该任务 `ok=True`；auto 任务 `next_run_at` 正确。
   自动检查的未通过原因可在 `sched status`、管理台"等待上线检查"区或 `data/runtime/admission.json` 看到。
 - [ ] serve 未运行时任务不会被检查：确认交付时 serve 的启动方式（systemd/`serve` 命令）。
 
@@ -115,13 +115,13 @@ python3 -m sched register <id>
 
 ### C1 正式调度触发成功（唯一有效的成功证据）
 
-- [ ] 任务由 **serve 按 schedule 触发**（interval/once；manual 类任务由 `run` 入队后经准出执行），
-      终态 `success`、退出码 0。
+- [ ] 任务由 **serve 按 schedule 触发**（auto 类型由 engine 按 interval 给机会；manual 类任务由 `run` 或管理台「立即运行一次」入队后经准出执行），
+      终态 `success`（或 `schedule_skip` — 任务自治时机判断"当前不该跑"、SDK reschedule 重排队）、退出码 0 或 102。
 - [ ] `outputs.expect` 所列文件全部真实存在且内容非空、格式正确、无占位符。
 - [ ] run 记录完整：`data/runs/<id>.jsonl` 有对应记录，started/finished/duration 合理，
       账本 est_mem/est_cpu 与观测同量级（`status` 对照 reserved vs actual）。
 - [ ] **正式历史无 manual 调试记录**（manual 类型任务除外，其 trigger 本就是 manual；
-      interval/once 任务的历史只允许 interval/once/second_pass）。
+      auto 任务的历史可能有 auto/schedule_skip/second_pass）。
 
 ```bash
 # 历史洁净核对（不应出现调试期的 manual 触发，_dev 任务不应出现在正式列表）

@@ -42,9 +42,9 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
 - 二刷分支只处理 pending_skipped；补不动的进 dead_letter。
 
 ### 02_once_migration — 一次性回填
-- **`once_at` 必须是未来的带时区 ISO8601**；过期=永不触发，上线前再核一次时区。
+- **旧语义 `once_at` 已废弃**（讨论二）：这个场景用 `type=manual` + 手动触发一次（`sched run <id>` 或管理台「立即运行一次」），跑完后留在注册表但不自动再触发；确认无误后按 C4 流程清理。
 - 按 ID chunk（示例 8 行/片），断点 `{"last_id": n}`，目标写入必须 `ON CONFLICT` 幂等。
-- 优先级给高（80）是因为一次性任务通常有时效；跑完后它留在注册表不再触发，确认无误后按 C4 流程清理。
+- 优先级给高（80）是因为一次性任务通常有时效。
 
 ### 03_manual_report — 手动导出
 - manual 不是特权：可抢占、心跳阈值仅 ×2；长导出必须按批断点（`{"last_batch": n}`）。
@@ -58,7 +58,8 @@ cp -r <skill目录>/assets/skeleton tasks/<你的id>
   heartbeat 已放宽到 300s。**能拆步的任务禁止用这个模板。**
 
 ### 05_nightly_batch — 夜间大批量
-- 跨夜窗 23:00–08:00 + `allow_overrun=true`（跑过 8 点也不被窗口收口杀掉）。
+- 跨夜窗 + `allow_overrun=true` 是**旧语义已废弃**（讨论二移除窗口收口）。新写法：
+  `type=auto` + `interval=86400`（每天给一次机会），任务进程内自己判断"当前 23:00–08:00 就跑，其他时段 reschedule(3600) + exit_skip()"。
 - 低优先级 15：随时给白天任务让路；断点二维 `{"partition": p, "cursor": n}`，每条目 flush。
 - dry 只跑 6 步用于过闸；真实量级 5000/分区是示例常量，按实际替换，单步耗时仍需 ≪120s 心跳。
 
