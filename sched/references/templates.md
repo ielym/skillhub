@@ -1,74 +1,64 @@
-# 子任务模板索引（按场景复制，禁止直接把模板本体当正式任务）
+# 场景模板选择指南（templates）
 
-> 模板位于 `assets/`，全部**已对真实 SDK 与五道闸等价流程验证通过**（probe=0 / dry 冒烟=0 /
-> 非豁免模板 ckpt TERM→99→恢复=0）。使用方式：
+模板在 `assets/templates/` 下，每个模板一个目录，包含：
 
-```bash
-# 1) 复制为你的任务 id（在代码根）
-cp -r <skill目录>/assets/templates/<模板目录> tasks/<你的id>
-# 基础骨架（最小可用）：
-cp -r <skill目录>/assets/skeleton tasks/<你的id>
-# 2) 改 task.json（name/description/schedule/priority/resources/…）与 run.py 业务逻辑
-# 3) 放进 tasks/ 后调度器自动跑五道上线检查（或 register 立即检查），流程见 acceptance.md
-```
+- `run.py` — 业务入口（继承 SDK 基类）
+- `manifest.json` — 子任务清单（schema_version=3）
+- 可选：`requests/` 示例意图文件
 
-模板之间刻意**代码复制不共享**（H5 隔离铁律）：复制后该任务与模板、其他任务再无任何依赖关系。
-所有模板的 dry 模式都不产生真实副作用；`SCHED_DEMO_*` 环境变量仅为错误注入演练开关，正式逻辑里删除。
+| 模板 | 场景 | kind | 说明 |
+| --- | --- | --- | --- |
+| `daemon` | 单进程常驻循环 | daemon | 每天 1 个、每小时 1 个、持续监控类；一个意图 = 一个 daemon；内部 `while True` + 断点 |
+| `multi_process_driver` | 驱动进程按需 emit_intent | 混合型 | 大任务 + 日更并行、多粒度；一个意图 = 一个 oneshot；由 `controller.py` 驱动写新意图 |
+| `once_migration` | 一次性迁移 | oneshot | 跑完自然退出；daemon/oneshot 选哪个取决于"跑完了要不要继续守护" |
 
-## 选型决策
+## 模板一：daemon（单进程常驻）
 
-| 你的场景 | 用哪个 | schedule | priority 参考 | 关键模式 |
-| --- | --- | --- | --- | --- |
-| 还不确定/最小起步 | [skeleton](../assets/skeleton/) | interval（示例） | 40 | 游标断点、skip→110→二刷、原子交付物 |
-| 定时抓取/轮询外部 API，受代理/限流约束 | [01_interval_crawler](../assets/templates/01_interval_crawler/) | interval+时间窗+weekdays | 45 | 分页断点、外部资源错误快速 101 立即重排队（retry 段自治节奏） |
-| 一次性迁移/历史回填，只跑一次 | [02_once_migration](../assets/templates/02_once_migration/) | once（未来时刻！） | 80 | ID 分片断点、逻辑错误 `LOGIC:` 转人工、幂等写 |
-| 人工按需触发的大结果集导出 | [03_manual_report](../assets/templates/03_manual_report/) | manual（可抢占） | 55 | 批次断点 + append 续跑、skip/110、心跳放宽 |
-| 外部原子操作，无法断点/无法重入 | [04_exempt_atomic](../assets/templates/04_exempt_atomic/) | manual + contract_exempt | 90 | **无闸5/不可抢占/崩溃不自动恢复**，极慎用 |
-| 夜间大批量长计算，可被白天任务随时抢占 | [05_nightly_batch](../assets/templates/05_nightly_batch/) | interval 跨夜窗 + allow_overrun | 15 | 二维分片断点(partition,cursor)、细粒度心跳 |
+适合场景：
+- 每天抓一次当天论文
+- 每小时同步一次数据镜像
+- 持续监控某个指标，异常时告警
 
-## 各模板要点与必读注意
+特点：
+- 一个意图 = 一个 `DaemonTask` 常驻循环
+- `steps()` 里 `while True`：跑一次业务逻辑 → 落断点 → `yield`
+- 进程退出靠 SDK 调用（`request_stop` / `exit`）或被高优抢占
 
-### skeleton — 最小骨架
-6 个条目演示：dry 零副作用、每步 flush 断点、单条坏数据 skip→110→second_pass→dead_letter、
-逻辑错误靠 `raise ValueError("LOGIC:")` + `logic_regex`、交付物原子写。
-演练：`SCHED_DEMO_SKIP=1`。
+## 模板二：multi_process_driver（驱动进程按需起）
 
-### 01_interval_crawler — 定时采集
-- 每"页"一个步（约 1s dry sleep 仅供闸5），断点 `{"page": n}`；`_upsert_item` 必须幂等。
-- 代理/429 等外部资源问题**无需任何容量配置**：任务直接 exit 101，调度器立即重排队；
-  重试间隔/次数上限/时效在 task.json `retry` 段声明（模板示例 delay_sec=300），
-  不同代理账号/VPN 等由任务自己选用，调度器不感知也不混用管理。
-- 资源失败演示：`SCHED_DEMO_RESERR=1` → exit 101；真实代码里网络超时要设超时、429 直接快速失败，禁止 sleep 死等。
-- 二刷分支只处理 pending_skipped；补不动的进 dead_letter。
+适合场景：
+- 一个 2 天大任务（长期跑，被抢占后续跑）
+- 每天额外抓当天的（每天一个新意图）
+- 多粒度并发（不同优先级/资源的多个进程）
 
-### 02_once_migration — 一次性回填
-- **旧语义 `once_at` 已废弃**（讨论二）：这个场景用 `type=manual` + 手动触发一次（`sched run <id>` 或管理台「立即运行一次」），跑完后留在注册表但不自动再触发；确认无误后按 C4 流程清理。
-- 按 ID chunk（示例 8 行/片），断点 `{"last_id": n}`，目标写入必须 `ON CONFLICT` 幂等。
-- 优先级给高（80）是因为一次性任务通常有时效。
+特点：
+- 一个意图 = 一个 oneshot（`OneshotTask`）有限迭代
+- 驱动进程（`controller.py`）作为 daemon，在正确时机 `emit_intent()` 写新意图
+- 不同请求配置不同的 `priority` / `resources`
+- **新执行 = 新 request_id**，调度器天然可回溯不同时期的执行方式
 
-### 03_manual_report — 手动导出
-- manual 不是特权：可抢占、心跳阈值仅 ×2；长导出必须按批断点（`{"last_batch": n}`）。
-- 首轮重建文件（表头），续跑 append 下一批 → 断点重放天然不重复行；若你的格式不支持 append，
-  改成"每批一个 part 文件 + 最后合并"，同样按批次位点续跑。
-- 触发：`python3 -m sched run <id>`（只入队，执行仍排队/可被抢占）。
+## 模板三：once_migration（一次性）
 
-### 04_exempt_atomic — 豁免原子任务（最高警示级）
-- 闸1–4 照过、**闸5 免除**；只能 manual；不可抢占；serve 重启后**不自动恢复**、需人工确认外部状态。
-- 动作必须真的短而原子（外部原子 API），`smoke.max_runtime_sec` 与预估时长匹配；
-  heartbeat 已放宽到 300s。**能拆步的任务禁止用这个模板。**
+适合场景：
+- 迁移脚本（跑完就结束，不需要守护）
+- 一次性数据修复任务
 
-### 05_nightly_batch — 夜间大批量
-- 跨夜窗 + `allow_overrun=true` 是**旧语义已废弃**（讨论二移除窗口收口）。新写法：
-  `type=auto` + `interval=86400`（每天给一次机会），任务进程内自己判断"当前 23:00–08:00 就跑，其他时段 reschedule(3600) + exit_skip()"。
-- 低优先级 15：随时给白天任务让路；断点二维 `{"partition": p, "cursor": n}`，每条目 flush。
-- dry 只跑 6 步用于过闸；真实量级 5000/分区是示例常量，按实际替换，单步耗时仍需 ≪120s 心跳。
+特点：
+- 一个意图 = 一个 oneshot
+- 跑完 exit 0 就 done，不需要守护
+- 如果希望"跑完自动再次跑" → 用 daemon 或 multi_process_driver
 
-## 模板自检（复制后、上线前）
+## 模板通用字段
 
-```bash
-cd tasks/<id>
-export SCHED_WORKSPACE=$PWD PYTHONPATH=<代码根>
-SCHED_CONTRACT_PROBE=1 SCHED_RUN_ID=probe python3 run.py            # 预期 exit 0
-SCHED_DRY_RUN=1 SCHED_RUN_ID=smoke python3 run.py                 # 预期 exit 0，results/ 交付物已生成
-# 非 exempt 模板再做断点演练（见 acceptance.md A2 的 kill -TERM 双终端流程）
-```
+| manifest 字段 | 推荐值 | 说明 |
+| --- | --- | --- |
+| run_mode | auto | 注册即消费意图；manual 适合需要显式运维启动的场景 |
+| priority | 20~60 | 高优 80+ 会抢占低优 |
+| resources | cpu=0.1~1, memory_mb=64~2048 | 如实申报；运行后按画像动态调 |
+| runtime.user | sched-run | 部署用户；本地开发可空 |
+
+| 意图 lifetime.retry 字段 | 推荐值 | 说明 |
+| --- | --- | --- |
+| backoff_base_sec | 5 | 初始退避 |
+| backoff_cap_sec | 300 | 封顶 |
+| not_after | "" | 空=无绝对截止 |

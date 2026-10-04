@@ -1,96 +1,92 @@
 ---
 name: sched
-description: sched 优先级抢占式任务调度器的使用规则与子任务创建规范。当用户要在 sched 上新建、上线、调试、交付一个被调度子任务，或咨询任务门禁（五道闸）、资源申报、优先级/抢占、断点续跑、错误码、外部资源重试自治、验收标准时使用。
+description: sched 本地子任务守护器的使用规则与子任务创建规范。当用户要在 sched 上新建、上线、调试、交付一个被守护子任务，或咨询子任务清单(manifest)/意图文件/双闸准入/进程控制协议/抢占/断点续跑/错误码时使用。
 ---
 
-# sched（任务调度器）
+# sched（任务守护器）
 
-## 能力介绍
+## 核心定位
 
-sched 是常驻单进程的本地任务调度器：高优任务可抢占低优在跑任务、任务必须可断点续跑、
-任务放进 `tasks/` 后经五道契约闸**自动准入**、本机资源经 cgroup v2 硬限 + 账本 + 画像防打爆，
-并自带零构建 Web 管理台。无外部服务依赖（不用数据库、不用 APScheduler）。
+sched 是常驻单进程的**本地子任务守护器**：
 
-本 skill 是在 sched 上**创建、调试、上线、交付子任务**的规范入口，也是所有调度器使用问题
-的路由入口。**核心目标：高优任务绝对优先执行完毕、资源有限不打爆机器、所有任务最终都能被正确执行。**
+1. **进程意图驱动**：子任务通过写入不可变的「意图文件」（`requests/<request_id>.json`）声明"我要一个进程"；调度器扫描后拉起、维护、终结。
+2. **固定控制协议**：子任务/进程与调度器只通过三条固定通道通信——**意图文件**（写新进程）、**state.json 的 control 段**（stop / no_retry / reschedule）、**退出码**（0 / 99 / 100 / 101 / 102 / 110）。
+3. **全局资源协调**：cgroup v2 硬限 + 账本 + 资源画像（声明 + 运行中动态采样），同优先级冷启动轮转、有数据后 SJF。
+4. **全进程可抢占**：**没有不可抢占**——高优绝对优势，可抢占任何更低优先级进程（daemon 也一样）。被抢进程 exit 99、落断点、同意图续跑。
+5. **全进程断点硬契约**：daemon 与 oneshot 共用一套 SDK 断点（SIGTERM → 落断点 → exit 99）。调度器重启/抢占后从断点续跑，不重复已完成工作。
+6. **append-only 意图**：意图文件写后不可变、不自行删除；新执行 = 新 `request_id` 文件，天然可回溯不同时期执行方式。
+7. **无 interval / 无 trigger**：时机全部由子任务代码通过"写新意图"表达——调度器只做"扫描→收敛→资源协调"。
 
 **路径约定（全文统一）**：
 
-- **代码根**：scheduler 仓库的 clone 目录（`tasks/`、`data/` 的父目录；默认取 `sched` 包所在
-  目录的上一级，可用环境变量 `SCHED_HOME` 覆盖）。
-- **skill 目录**：本 skill 的安装目录（模板与参考文件在其 `assets/`、`references/` 下）。
+- **代码根**：scheduler 仓库 clone 目录（`tasks/`、`data/` 的父目录；默认 `sched` 包上一级，环境变量 `SCHED_HOME` 覆盖）。
+- **skill 目录**：本 skill 的安装目录（模板/参考在其 `assets/`、`references/` 下）。
 
-**核心理念**：
+## 核心理念
 
 | 维度 | sched 的规则 |
 | --- | --- |
-| 调度依据 | **优先级决定一切**：高优等待可抢占低优在跑任务 |
-| 任务形态 | **必须有限、可断点**；禁止常驻，长任务分段提交断点 |
-| 准入 | **五道闸自动检查**：静态→契约→冒烟→容量→断点，缺一不可；放入 tasks/ 即自动开检，无需手动注册；闸失败不做定时重试，改文件指纹变化才重检 |
-| 资源 | 必须如实申报 CPU/内存，cgroup 硬限 + 账本 + 画像（运行中动态采样，同优先级按预估时长 SJF）；代理/VPN/配额等外部资源**不做统一管理**，任务按退出码 101 自分类、立即重排队，节奏/上限/时效由任务 retry 段自治 |
-| 失败处理 | 统一错误码，资源错误立即重排队（任务 retry 段控 delay/max/not_after）、逻辑错误转人工、110 二刷 |
-| 任务基类 | **强制 SDK 契约行为**：心跳、断点、99 退出、错误分类 |
-| 手动任务 | 不可恢复任务只能 manual（`contract_exempt`），其余 manual 触发**同样可被抢占** |
+| 调度依据 | **优先级决定一切**：高优等待可抢占低优在跑任务（含 daemon） |
+| 任务形态 | **daemon 与 oneshot 共用**：daemon 常驻靠 `while True` 循环 + 断点契约；oneshot 有限迭代；**都可被抢占** |
+| 准入 | **双闸自动检查**：静态（manifest schema + entry 可执行 + 路径）→ 契约可执行（dry 跑通 + state.json 合法）。放入 `tasks/<id>/` 即自动开检，无需手动注册 |
+| 资源 | 必须如实申报 CPU/内存（manifest resources）；cgroup 硬限 + 账本 + 画像；外部资源（代理/配额/VPN）**不做统一管理**，子任务按 100/101 退出码自分类，同意图 retry 配置（backoff）自治 |
+| 新执行 | **新执行 = 新意图文件**（新 `request_id`），绝不可改写已有意图文件 |
+| 进程协调 | **子任务自己管理**：多次新进程 = 多次 `emit_intent()`；无全局 queue/replace/reject 语义；通过代码（SDK）完成，禁止自然语言 |
+| 失败处理 | 统一退出码：0 成功、99 抢占续跑、100/101 资源不足回退 pending、102 跳过本轮、110 数据风险、其他非 0 兜底按资源回退 pending |
+| 任务基类 | **强制 SDK 契约行为**：继承 `SchedTask`（或 `OneshotTask`/`DaemonTask`），心跳、断点、99 退出、错误分类 |
+| 生命周期控制 | 只能通过**固定协议**：意图文件（写新进程）、state.json control 段（stop/no_retry/reschedule）、退出码。**禁止自行删改意图文件** |
 
 ## 适用 / 不适用
 
-- **适用**：在代码根上创建新的被调度子任务；为已有任务改配置/排障/做交付验收；判断一个任务能否/如何纳入调度。
+- **适用**：在代码根上创建新的被守护子任务；为已有子任务改配置/排障/做交付验收；判断一个子任务能否/如何纳入守护；咨询 manifest 怎么写、意图文件怎么发、退出码什么意思。
 - **不适用**：调度器核心源码（`sched/` 包）本身的重构开发（走需求审查流程，不属于子任务创建）。
 - **铁律：子任务作者只在 `tasks/<id>/` 自己的目录内工作，禁止改 `sched/` 包源码、禁止手改 `data/runtime/` 内文件。**
 
 ## 命令速查
 
-均在代码根执行（或用等价的 `sched` 命令）；确切行为与失败情形见 [configuration.md](references/configuration.md)。
+均在代码根执行（或等价 `sched` 命令）；确切行为与失败情形见 [configuration.md](references/configuration.md)。
 
 ```bash
-python3 -m sched list                 # 已上线任务、ok 状态、下次触发
-python3 -m sched register <id>        # 立即跑一次五道上线检查（常规无需使用：放进 tasks/ 后自动检查）
-python3 -m sched run <id>             # 立即运行一次（只入队！是否/何时跑由 serve 准出决定；无 --dry-run）
-python3 -m sched status               # 任务数、等待运行/运行中、账本预留/实测、未通过上线检查项
-python3 -m sched serve                # 常驻调度循环（自动发现新任务并跑上线检查，热加载周期 30s，单实例互斥）
-python3 -m sched serve --web          # 同时启动内嵌 Web 管理台（默认 127.0.0.1:8799）
+python3 -m sched list                  # 已上线子任务、ok 状态、优先级、资源预估
+python3 -m sched register <id>        # 立即跑双闸上线检查
+python3 -m sched start <id>           # 启用 run_mode=manual 的子任务（置 enabled=true）
+python3 -m sched status                # 子任务数、WQ、运行中、账本、意图消费状态
+python3 -m sched process list [name]  # 子任务的意图清单 + 运行进程
+python3 -m sched process stop <sid> <rid>     # 终止运行中意图
+python3 -m sched process no-retry <sid> <rid> # 标记不再重试
+python3 -m sched serve                 # 常驻调度循环（自动发现新子任务、热加载 30s）
+python3 -m sched serve --web           # 同时启动内嵌 Web 管理台
 ```
-
-注意：CLI **没有** kill/stop 命令（运行中停止用管理台队列页「停止」按钮：SIGTERM 整组、
-断点可续、本轮转人工）、`run` **没有** `--dry-run` 开关；任务想停用就移出 `tasks/`
-或把 `data/jobs.json` 中对应条目 `enabled` 置 false。外部资源（代理隧道/VPN/API 配额）
-没有任何配置命令——由任务在运行中按错误码自分类、在 task.json `retry` 段声明重试节奏（见下）。
 
 ## 路由：我要做什么 → 看哪个文件
 
 | 你的问题 / 任务 | 必读文件 |
 | --- | --- |
-| 从零做一个任务，按什么流程走 | [workflow.md](references/workflow.md)（四阶段流程）+ [acceptance.md](references/acceptance.md)（三张强制清单） |
-| 哪些事绝对不能做 / 交付红线 | [rules.md](references/rules.md)（铁律 H1–H12 + 红线总表） |
-| 上线检查（五道闸）不过，怎么修 | [gates.md](references/gates.md)（五道闸逐条判定与修复，上线前必读） |
-| task.json 怎么写、SDK 怎么用、退出码/状态文件 | [contracts.md](references/contracts.md) |
+| 从零做一个子任务，按什么流程走 | [workflow.md](references/workflow.md)（四阶段流程）+ [acceptance.md](references/acceptance.md)（三张强制清单） |
+| 哪些事绝对不能做 / 交付红线 | [rules.md](references/rules.md)（铁律 H1–H10 + 红线总表） |
+| 上线检查（双闸）不过，怎么修 | [gates.md](references/gates.md)（双闸逐条判定与修复） |
+| manifest 怎么写 / 意图文件怎么发 / SDK 怎么用 / 退出码 / control 段 | [contracts.md](references/contracts.md) |
 | settings 参数、CLI 确切行为、数据/日志布局 | [configuration.md](references/configuration.md) |
-| 抢占/排队/重试自治/时间窗/触发时刻怎么算 | [scheduling.md](references/scheduling.md) |
+| 抢占/排队/重试自治/意图消费状态 | [scheduling.md](references/scheduling.md) |
 | 首次部署、cgroup 委派自检、Web 公网暴露、日常运维 | [deployment.md](references/deployment.md) |
-| 任务跑挂了 / 状态异常怎么排查 | [troubleshooting.md](references/troubleshooting.md) |
-| 找起步代码（骨架/场景模板） | [templates.md](references/templates.md) + [assets/](assets/) |
+| 子任务跑挂了 / 状态异常怎么排查 | [troubleshooting.md](references/troubleshooting.md) |
+| 起步代码（骨架/场景模板） | [templates.md](references/templates.md) + [assets/](assets/) |
 
-## 铁律索引（H1–H12，违反任一条不得交付）
+## 铁律索引（H1–H10，违反任一条不得交付）
 
-1. **H1 唯一执行通道**：正式执行只能由调度器准出触发，禁止 cron/手工跑/任务自触发。
-2. **H2 有限且可断点**：禁常驻；SIGTERM 后 40s 内存断点、exit 99。
-3. **H3 抢占只由优先级决定**：唯一例外 `contract_exempt`（强制 manual）。
-4. **H4 必走 SDK 契约**：继承 `SchedTask`，禁裸脚本绕过探针/心跳/断点/分类。
-5. **H5 任务间完全隔离**：一任务一目录，禁跨任务 import/共享可变物。
-6. **H6 资源如实申报**：CPU/内存必填且有依据，虚低申报闸4 拒绝；外部资源（代理/配额等）无法统一申报与管理，靠 101 错误码 + 任务 retry 段自治重试。
-7. **H7 错误真实分类**：逻辑错误显式报（转人工），资源错误 100/101 快速失败立即重排队，不死等。
-8. **H8 单条坏数据不卡死整体**：skip_item → 110 二刷 → dead_letter。
-9. **H9 心跳义务**：周期写 state.json（SDK 每 30s），超时 120s 判卡死。
-10. **H10 调试与正式隔离**：只在 `_dev`/裸进程调试，正式历史无 manual 记录。
-11. **H11 无密钥、执行面最小**：密钥走 600 权限文件；禁黑名单 env 键与绝对/`..` 路径。
-12. **H12 源码不动、数据不手改**：仅调试清理时按流程编辑 jobs.json。
+1. **H1 唯一执行通道**：正式执行只能由调度器扫描意图触发；禁止 cron/手工跑/自触发。
+2. **H2 全进程可抢占**：无豁免；daemon/oneshot 都可被高优抢占；被抢必落断点 exit 99。
+3. **H3 全进程断点硬契约**：daemon 同样 SIGTERM → 落断点 → exit 99；不落地则后续无法恢复。
+4. **H4 append-only 意图**：意图文件写后不可变、不自行删除；新执行 = 新 request_id。
+5. **H5 生命周期只走控制协议**：禁止自行删改意图文件；停止/不再重试/稍后再跑走 state.json control 段或退出码。
+6. **H6 进程协调代码化**：多次新进程、是否停旧进程、何时起新进程——**全部由子任务代码通过 SDK 完成**（`emit_intent` / `no_retry` / `request_stop`），禁止自然语言。
+7. **H7 必走 SDK 契约**：继承 `SchedTask`，禁裸脚本绕过心跳/断点/分类。
+8. **H8 资源如实申报**：manifest 里 resources 必填且有依据；外部资源（代理/配额等）无法统一申报与管理，靠 100/101 自治。
+9. **H9 无密钥、执行面最小**：密钥走 600 权限文件；禁黑名单 env 键与绝对/`..` 路径。
+10. **H10 源码不动、数据不手改**：仅调试清理时按流程编辑数据文件。
 
 全文（含每条的细节与原因）见 [rules.md](references/rules.md)。
 
 ## 标准流程一句话
 
-**阶段 0 设计**（定 id/优先级/资源/断点/错误分类/retry 策略，选模板）→ **阶段 1 本地 `_dev` 裸进程调试**
-（探针/dry/断点演练）→ **阶段 2 放入 `tasks/<id>/`，调度器自动跑五道闸上线**（闸失败不自动重试：
-在管理台/status 看原因，本地改文件后按新指纹重检；也可手动 `register <id>` 或管理台「导入任务」
-立即检查）→ **阶段 3 只认调度触发成功的交付验收**。
-详见 [workflow.md](references/workflow.md)，每阶段打勾清单见 [acceptance.md](references/acceptance.md)。
+**阶段 0 设计**（定 id/run_mode/优先级/资源/断点/意图策略，选模板）→ **阶段 1 本地裸进程调试**（`_dev` 目录跑 `run.py --dry-run`、断点演练）→ **阶段 2 放入 `tasks/<id>/`，调度器自动跑双闸上线**（闸失败在管理台/status 看原因，改文件后自动重检；也可手动 `register <id>` 立即检查）→ **阶段 3 跑通完整意图流程 + 抢占恢复演练** → **阶段 4 只认调度触发成功的交付验收**。

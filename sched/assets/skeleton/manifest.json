@@ -1,0 +1,12 @@
+{
+  "schema_version": 3,
+  "name": "<name>",
+  "description": "<一句话说明这个子任务做什么>",
+  "run_mode": "auto",
+  "entry": { "file": "run.py", "interpreter": "python3", "args": [], "cwd": "." },
+  "priority": 30,
+  "resources": { "cpu": 0.5, "memory_mb": 128 },
+  "error_rules": { "resource_regex": [], "logic_regex": [] },
+  "heartbeat": { "timeout_sec": 120 },
+  "runtime": { "user": "sched-run" }
+}

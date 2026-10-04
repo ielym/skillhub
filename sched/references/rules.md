@@ -1,57 +1,89 @@
-# 强制规则（铁律 H1–H12 与红线总表）
+# 铁律与红线（H1–H10）
 
-> 这是 sched 上一切任务工作的**强制规范**：违反任一条铁律不得交付；触碰任一红线即判定
-> 交付不合格。流程与清单见 [workflow.md](workflow.md) 与 [acceptance.md](acceptance.md)。
+违反任一条 **不得交付**，且需立刻修——这些不是"建议"，是系统级契约。
 
-## 铁律（H1–H12，强制，违反任一条不得交付）
+## H1 唯一执行通道
 
-- **H1 唯一执行通道**：任务的每一次真实执行都必须由调度器准出触发。禁止 crontab/systemd timer/手工 `python3 run.py`
-  跑正式任务、禁止任务内 fork 长驻后台、禁止任务调用 sched CLI 触发自己或别的任务。裸进程执行只允许出现在
-  `_dev` 调试阶段（见 [workflow.md](workflow.md)「调试约束」）。
-- **H2 任务必须有限且可断点**：每个 run 要能在有限时间内跑完或进入可等待状态；长流程必须切成多个步骤，
-  每步落 `resume_point` 并 `flush()`；收到 SIGTERM 后在宽限期（40s）内保存断点并以 **99** 退出。
-  **禁止 `while True` 常驻、禁止不可中断的长事务。**
-- **H3 可抢占性只由优先级决定**：不存在、也不允许自造任何"不可抢占/豁免"开关。唯一例外是
-  `contract_exempt=true`（无法保证断点数据完整性的任务），它被强制只能 `schedule.type=manual`，
-  且不得用于可恢复任务来逃避抢占。
-- **H4 必须走 SDK 契约**：任务继承 `sched_task_sdk.SchedTask`，实现 `steps(resume)` 生成器，入口调
-  `run_task()`。不允许用裸脚本绕过契约探针/心跳/断点/错误分类行为。
-- **H5 任务间完全隔离**：一任务一目录 `tasks/<id>/`；代码各自一份，**禁止跨任务 import、禁止引用他任务目录文件、
-  禁止共享 cache/results/配置/可变外部资源**；跨任务输入只能是只读稳定源。宁可复制，不许共享可变物。
-- **H6 资源必须如实申报**：`resources.cpu/memory_mb` 必填且有依据（冒烟实测或保守上限）；声明或实测超整机
-  上限、以及两者都为 0（预估未知）闸4 一律拒绝。不得靠低报抢资源——实测持续超限会被优雅抢占，OOM 会被杀并重试。
-  代理/VPN/API 配额等外部资源**不属于申报项、调度器也不池化管理**（跨账号/跨协议无法感知真实占用）：
-  任务在运行中按实际错误 `sys.exit(101)` 自分类，调度器立即重排队，重试节奏/上限/时效由任务
-  `retry` 段（delay_sec/max_attempts/not_after）自治。
-- **H7 错误必须真实分类上报**：逻辑错误在 steps 内 `raise ValueError("LOGIC: ...")` 并在 task.json
-  `logic_regex` 声明 `"LOGIC:"`（exit 1 + `last_error.category=logic`，转人工不重试）；
-  资源不足 `sys.exit(100/101)`、数据风险 `sys.exit(110)`（先 flush 现场），**不要在任务内 sleep 死等资源**；
-  未分类异常（unclassified）一律按资源错误立即重排队（受任务 retry 段约束），逻辑错误不分类会被反复重试，后果作者自负。
-  **注意：不要在 steps 内调用 `task.fail()` 后 return——会被 SDK 覆盖成 success（实测陷阱，见契约参考）。**
-- **H8 单条坏数据不得卡死整体**：捕获单条数据异常 → `skip_item(id, reason)` 落 pending_skipped → 本轮继续；
-  需要二刷时写好跳过项后以 110 退出，由调度器 `second_pass` 重入队补跑；确认无救的条目 `dead_letter()`。
-- **H9 心跳义务**：运行期必须周期性更新实例级 state.json（SDK 心跳线程每 30s 自动完成）；自研非 Python 入口
-  须自己写心跳。超过 `heartbeat.timeout_sec`（默认 120s）无更新即判卡死被杀。任何单步耗时不得逼近超时阈值。
-- **H10 调试与正式彻底隔离**：一切调试在 `<id>_dev` 任务或本地裸进程上进行；正式任务**从不手动 run**，
-  其历史中只能有 auto（含 second_pass 恢复 + schedule_skip 重排队）触发记录；调试完按清单清除全部痕迹。
-- **H11 无密钥、可执行面最小**：task.json 的 `env` 禁止放密钥（任务进程间同机可读 `/proc/<pid>/environ`），
-  密钥放任务目录内 600 权限配置文件；`env` 不得使用黑名单键（`LD_PRELOAD/PATH/...`，见契约参考）；
-  入口解释器只能是命令名（不带路径），入口/cwd/产物路径不得含 `..` 或绝对路径。
-- **H12 调度器源码不动、数据文件不手改**：需要修改 `sched/` 包行为时提需求，不得在任务侧 monkey-patch；
-  `data/` 下除调试清理时按流程编辑 `jobs.json` 外，其余文件（scheduler_state.json、active.json、runs/*.jsonl、
-  decisions.jsonl）一律禁止手工修改。
+**规则**：正式执行只能由调度器扫描 `requests/` 里的意图触发。禁止 cron/手工跑 `run.py`/子任务自触发（自触发会绕开资源协调，可能打爆机器）。
 
-## 红线总表（任一触发即判定交付不合格）
+**检查方式**：`run.py` 开头判断 `SCHED_RUN_ID` 环境变量——没有就输出警告并退出（`_dev` 目录调试例外）。
 
-1. 正式任务被手工执行/常驻/自调度，或由 cron 等调度器之外的通道触发（H1）。
-2. 不可断点、SIGTERM 后不能 99 退出的任务没有标 `contract_exempt`，或可恢复任务滥用 exempt（H2/H3）。
-3. 裸脚本不继承 SDK、运行期不写心跳（H4/H9）。
-4. 跨任务 import/共享文件/共享配置/互相依赖产物（H5）。
-5. 资源申报为 0、虚低、无依据（H6）。
-6. 逻辑错误未显式分类，指望调度器重试"碰运气"（H7）。
-7. 单条数据异常导致整 run 长卡或整体失败而不走 skip/110（H8）。
-8. 在正式任务上调试；`_dev` 残留；正式历史出现 manual 记录（H10）。
-9. task.json/env 含密钥或黑名单键；路径绝对化/含 `..`（H11）。
-10. 修改 `sched/` 源码或手改 `data/runtime/` 文件以绕过门禁（H12）。
-11. 五道上线闸未全过即宣布完成；用"我本地跑通过"代替五闸与调度触发验收。
-12. cgroup 降级状态下交付资源敏感型任务，且未在交付说明中标注。
+## H2 全进程可抢占
+
+**规则**：无豁免——daemon/oneshot 都可被高优抢占。抢占后必须 40s 内落断点 exit 99；否则调度器 SIGKILL。
+
+## H3 全进程断点硬契约
+
+**规则**：daemon 同样要满足 SIGTERM → 落断点 → exit 99。不落地则调度器重启/抢占后无法恢复，进程会丢工作。
+
+**SDK 保证**：继承 `SchedTask` 后 SIGTERM 钩子自动设 `_preempted` + 心跳线程退出 + exit 99。
+
+## H4 append-only 意图
+
+**规则**：意图文件（`requests/<request_id>.json`）写后**不可变、不可自行删除**。
+
+- 改写已有意图 → 调度器标 `rejected`（append-only 违规，需手动处理）
+- 自行删意图 → 调度器在持久态里标记 `done`（意图终结），但**不推荐自行删除**——应通过 SDK `request_stop` / `no_retry` 等协议控制
+
+**正确做法**：新执行 = 新 `request_id` 文件（`emit_intent()` 自动生成新 ID）。
+
+## H5 生命周期只走控制协议
+
+**规则**：禁止子任务自行删意图文件。停止/不再重试/稍后再跑——统一走固定协议：
+
+| 目标 | 正确做法 | 错误做法 |
+| --- | --- | --- |
+| 让进程停止 | SDK `request_stop()` → state.json control 段 | 自行删意图文件 |
+| 让进程不再重试 | SDK `no_retry()` + exit 0/99/... | 删意图 + 改文件名 |
+| 稍后再跑 | SDK `reschedule(delay_sec)` | sleep + 自己 `emit_intent` |
+| 资源错误让调度器重试 | exit 100/101 | 什么都不做指望调度器自己重试 |
+
+## H6 进程协调代码化
+
+**规则**：多次新进程、是否停旧进程、何时起新进程——**全部由子任务代码通过 SDK 完成**。禁止在 SKILL.md 要求 Agent 用自然语言"生成"进程。
+
+- 场景：2 天长任务 + 每天抓当天 → 驱动进程 `controller.py` 在启动第 N 天时 `emit_intent(config=day_N.json)`
+- 场景：单实例（不要同时跑 2 个旧的）→ 驱动进程在写新意图前先调 SDK `request_stop` 旧进程，等调度器清理
+
+## H7 必走 SDK 契约
+
+**规则**：必须继承 `SchedTask`（或 `OneshotTask` / `DaemonTask`）。SDK 自动提供：
+
+- 心跳线程（写 state.json.updated_at）
+- SIGTERM 钩子（落断点 → exit 99）
+- 断点落盘（`resume_point.json`）
+- 错误分类辅助（`error(category, msg)`）
+
+禁裸脚本绕过这些探针。
+
+## H8 资源如实申报
+
+**规则**：manifest 里 `resources.cpu` / `resources.memory_mb` 必须如实填写——声明值作为初次准入的下界，调度器在运行中通过 cgroup 动态采样校准画像。
+
+外部资源（代理隧道/VPN/API 配额）**无法统一申报**——按 100/101 退出码自分类，SDK `error("resource", "...")` 让调度器自动 retry（意图的 lifetime.retry 控节奏）。
+
+## H9 无密钥、执行面最小
+
+**规则**：密钥必须走 `tasks/<id>/config/` 下 **600 权限文件**（`chmod 600 secret.pem`）。禁把密钥放进 manifest/state.json/错误输出。
+
+禁黑名单 env 键（LD_PRELOAD / LD_LIBRARY_PATH / PYTHONSTARTUP / PATH 等）。
+
+绝对路径、路径里含 `..` 的 entry.file / config 路径都被 manifest 解析器拒绝。
+
+## H10 源码不动、数据不手改
+
+**规则**：子任务作者只在 `tasks/<id>/` 自己的目录内工作。**禁止**：
+
+- 改 `sched/` 包源码（那是调度器开发者的领域）
+- 手动编辑 `data/runtime/*.json`、`data/jobs.json`、`data/runs/*.jsonl`（调试清理时按流程编辑除外）
+
+## 红线总表（任一条 = 立即停手重写）
+
+| 红线 | 含义 |
+| --- | --- |
+| `SCHED_RUN_ID` 空跑正式任务 | 任务绕过调度器直跑，资源不受控 |
+| 意图文件被改写（指纹变更） | append-only 契约破坏，调度器标 rejected |
+| 意图文件被自行删除 | 风险高：调度器感知可能滞后，进程和意图状态不一致 |
+| 裸脚本跳过 SDK | 无心跳/断点，卡死无法恢复 |
+| 进程里硬编码密钥 | 泄漏 + 调试时被打出来 |
+| 自然语言"生成"多个进程 | 不可控——必须代码化 |

@@ -1,0 +1,12 @@
+{
+  "schema_version": 3,
+  "name": "arxiv_daily",
+  "description": "每天跑一次的 daemon：内部 while True 循环，落断点、被抢占后续跑",
+  "run_mode": "auto",
+  "entry": { "file": "run.py", "interpreter": "python3", "args": [], "cwd": "." },
+  "priority": 40,
+  "resources": { "cpu": 0.5, "memory_mb": 512 },
+  "error_rules": { "resource_regex": [], "logic_regex": [] },
+  "heartbeat": { "timeout_sec": 180 },
+  "runtime": { "user": "sched-run" }
+}

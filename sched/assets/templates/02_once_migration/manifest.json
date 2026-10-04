@@ -1,0 +1,12 @@
+{
+  "schema_version": 3,
+  "name": "once_migration",
+  "description": "一次性迁移，跑完自然 exit 0，调度器不再守护",
+  "run_mode": "auto",
+  "entry": { "file": "run.py", "interpreter": "python3", "args": [], "cwd": "." },
+  "priority": 20,
+  "resources": { "cpu": 0.2, "memory_mb": 256 },
+  "error_rules": { "resource_regex": [], "logic_regex": [] },
+  "heartbeat": { "timeout_sec": 300 },
+  "runtime": { "user": "sched-run" }
+}

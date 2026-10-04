@@ -1,23 +1,90 @@
-# 排查速查
+# 故障排查（troubleshooting）
 
-> 按现象定位含义与处理动作。任务 run 记录在 `data/runs/<id>.jsonl`，调度决策在
-> `data/runtime/decisions.jsonl`，任务 stdout/stderr 在 `data/runs/<id>/` 下。
+## 意图没被消费
 
-| 现象 | 含义/处理 |
+**现象**：`requests/<rid>.json` 写了很久，但 `process list` 里状态还是 `pending` 或没记录。
+
+**排查步骤**：
+
+1. **闸失败了？** `sched register <sid>` 看输出
+   - 闸1 manifest 解析失败 → 看 Web 管理台 `error` 字段修 manifest.json
+   - 闸2 契约失败 → 本地 `python3 run.py` 裸跑复现
+
+2. **run_mode=manual 未启用？** `data/jobs.json` 里 `enabled` 应该是 true；false 时用 `sched start <sid>`
+
+3. **账本满了？** `sched status` 看 ledger 预留；如果所有进程账本加起来接近机器上限 → 等其他任务结束 / 抢低优
+
+4. **指纹冲突 rejected？** 看 `intents_state.json` 里 `rejected_reason`，新执行必须是新 request_id 文件
+
+## 进程被频繁抢占
+
+**现象**：daemon 频繁 exit 99 后又起来，反复打断业务。
+
+**排查**：
+
+1. **自己优先级太低**？调 manifest 的 priority（0~100，越高越不容易被抢）
+2. **有高优任务在排队**？`status` 看 WQ，高优任务在等容量 → 等它起来
+3. **画像太保守**？声明资源申报偏保守 → 调 resources 或等画像收敛
+
+## 进程卡住（心跳超时）
+
+**现象**：monitor 判定 heartbeat_kill。
+
+**排查**：
+
+1. SDK 心跳线程正常跑吗？state.json.heartbeat_at 有没有持续更新
+2. heartbeat_timeout_sec 设得太短？manifest 里调大
+3. cgroup memory.max 硬限位导致 OOM kill → exit 137？看 exit 码
+4. 外部资源阻塞没超时？加 timeout 机制（别让进程一直卡在等待网络）
+
+## 进程 OOM
+
+**现象**：exit 137 / -9 / 审计日志 `overload_preempt`。
+
+**排查**：
+
+1. **声明虚低**？实际内存峰值 > 声明 × 1.5 → 上调 manifest.resources.memory_mb
+2. **业务逻辑泄漏**？profile 画像持续爬升 → 修内存泄漏
+3. **cgroup 硬限太严**？profile 上浮系数 overshoot 默认 1.5 → 调 settings.resource.overshoot
+
+## 意图不重试（本来应该回退重排）
+
+**现象**：exit 100/101 但意图直接 done，没回退 pending。
+
+**排查**：
+
+1. **SDK 写了 no_retry control 段？** state.json 里看 control.action（no_retry 会终结意图）
+2. **SDK 写了 stop control 段？** 进程主动 stop 也会终结
+3. **意图文件被删除了？** 文件消失 → 意图 done
+
+## 被抢占后没恢复（断点丢了）
+
+**现象**：抢占后新进程从开头跑，重做了已完成的工作。
+
+**排查**：
+
+1. **SDK 断点有没有保存？** 抢占前 state.json 的 resume_point 字段存在吗
+2. **resume_point.json 丢了？** tasks/<id>/cache/resume_point.json 应该有最后一次保存的断点
+3. **daemon 里 steps() 没循环？** 抢占后 resume → 重新进入 `while True`，应该从断点位置继续 yield
+
+## 审计日志看不到想要的事件
+
+**现象**：`decisions.jsonl` 里没有某次 preempt / exit_decision。
+
+**排查**：
+
+1. **文件没 flush？** `store.py` 是原子写 + 轮转，正常情况下立即可见
+2. **路径被 `_ignore` 列表过滤了？** scanner 会跳过 `_dev/` 等目录
+3. **serve 进程重启过？** 审计日志不会丢失，但重启前最后几条可能在轮转中
+
+## 核心排查文件一览
+
+| 文件 | 看什么 |
 | --- | --- |
-| `register` 失败/管理台显示"未通过上线检查" | 对应闸门失败；自动检查的原因也在 `data/runtime/admission.json`。gate2 契约失败：探针进程非 0 退出或 state.json 缺字段，裸跑 `SCHED_CONTRACT_PROBE=1 python3 run.py` 复现；改文件保存后立即重检 |
-| gate3 冒烟超时 | dry 路径没在 `smoke.max_runtime_sec` 内收敛；检查死循环/网络硬等待，dry 必须无真实 IO 等待 |
-| gate4 预估未知拒绝 | 声明 0 且 cgroup 实测 0；先按保守上限填 `resources.memory_mb`，并排查 cgroup 是否降级（自检见 [deployment.md](deployment.md)） |
-| gate5 打断后不是 99 / 恢复跑失败 | 步太长、SIGTERM 后没落断点、或恢复未消费 resume_point 导致重跑；缩短步长，每步末 flush |
-| run 状态 `resource` | 100/101 或未分类错误，已立即重排队；看 `data/runs/<id>.jsonl` 的 reason 与 stderr，资源类属正常退让。重试间隔/上限/时效由任务 `retry` 段控制（delay_sec 使等待项显示 not_before；到 max_attempts 记 giveup、过 not_after 记 giveup_expired 并转人工） |
-| run 状态 `preempted` | 正常的高优先抢，断点已存，自动重入队；频繁被抢说明优先级给低了或申报偏大 |
-| run 状态 `preempt_failed` | 40s 内没退出被 SIGKILL，断点未确认，转人工；必须缩短步长/优化信号响应 |
-| run 状态 `failed` | 逻辑错误或交付物缺失；交付物缺失查 outputs.expect 路径（相对任务目录） |
-| `killed` 且原因含心跳超时 | 单步阻塞超 heartbeat.timeout_sec；拆小步、保持 SDK 心跳（勿在心跳线程外长期阻塞 IO）。首次心跳超时自动重入队 1 次，连续第二次转人工 |
-| `killed` 且原因为手动停止 | 管理台「停止」或运维人工介入；本轮不自动重排队，处理后在管理台手动触发（断点仍可续跑） |
-| `status` 里 waiting 长期不动 | `status` 查账本余量与未通过上线检查项；常见原因：资源申报超剩余（正常排队，等高优/在途释放）、等待项 not_before 未到（任务 `retry.delay_sec` 声明的间隔）、已 giveup 转人工（队列中不再出现，去历史看原因）。外部资源没有容量开关可配 |
-| 新任务放进 tasks/ 后一直不出现 | serve 未运行（自动检查只在 serve 内执行）；或检查未通过——看 `status`/管理台"等待上线检查"区/admission.json 的失败原因；**闸失败不自动重试**，在本地改一次任务文件（或删掉目录重放）即按新指纹重检，也可管理台「导入任务」/`register` 立即检查 |
-| list 中任务 `ok=false` | task.json 非法或入口缺失；修复后下次热加载（≤30s）自动恢复 |
-
-五道闸逐条判定标准见 [gates.md](gates.md)；字段/退出码细节见 [contracts.md](contracts.md)；
-调度语义见 [scheduling.md](scheduling.md)；常见运维操作见 [deployment.md](deployment.md)。
+| `data/runtime/intents_state.json` | 每个意图的状态、指纹、run_id、rejected_reason |
+| `data/runtime/decisions.jsonl` | 所有调度决策（enqueue / admit / preempt / exit） |
+| `data/runtime/ledger.json` | 当前账本预留 |
+| `data/runtime/profiles.json` | 资源画像 |
+| `data/runtime/active.json` | 运行中进程清单 |
+| `data/runs/<sid>.jsonl` | 该子任务所有运行历史 |
+| `tasks/<sid>/cache/runs/<rid>/state.json` | 运行时心跳/断点/错误 |
