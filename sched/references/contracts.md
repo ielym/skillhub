@@ -16,7 +16,7 @@
     "args": [],
     "cwd": "."
   },
-  "priority": 40,                     // 0~100；意图可覆盖
+  "priority": 40,                     // 0~100；唯一优先级来源（意图文件不可覆盖）
   "resources": {                      // 基线，意图可覆盖
     "cpu": 0.5,
     "memory_mb": 512
@@ -58,8 +58,7 @@
   "kind": "daemon",                     // daemon | oneshot
   "config": "config/2026-10-04.json",   // 相对任务目录，--config 传入；可空
   "entry": { ... },                     // 可选覆盖 manifest.entry
-  "priority": 50,                       // 可选覆盖
-  "resources": { "cpu": 0.5, "memory_mb": 512 },  // 可选覆盖
+  "resources": { "cpu": 0.5, "memory_mb": 512 },  // 可选覆盖（覆盖声明值；画像仍动态校准）
   "lifetime": {
     "completion": "indefinite",        // terminal=oneshot 默认；indefinite=daemon 默认
     "retry": {
@@ -80,7 +79,7 @@
 | `SCHED_REQUEST_ID` | request_id |
 | `SCHED_RUN_ID` | run_id（调度器生成的 UUID 风格） |
 | `SCHED_CONFIG` | 意图的 config 字段 |
-| `SCHED_TRIGGER` | auto | retry | resume | second_pass | manual | start |
+| `SCHED_TRIGGER` | auto | retry | resume | second_pass |
 | `SCHED_ATTEMPT` | 第几次尝试（1 起） |
 | `SCHED_SCHEDULED_AT` | ISO8601 调度时间 |
 | `SCHED_WORKSPACE` | 任务目录绝对路径 |
@@ -177,7 +176,7 @@ task.reschedule(300)                 # 5 分钟后再给机会
 
 # 新意图（驱动进程场景）：
 task.emit_intent(config="config/2026-10-05.json",
-                 kind="oneshot", priority=60,
+                 kind="oneshot",
                  resources={"cpu": 0.2, "memory_mb": 128})
 # → 返回新 request_id
 ```

@@ -92,6 +92,69 @@ def fetch(url, timeout=30, retries=3):
 
 > 注：`proxies` 的 http/https 均为同一隧道地址；requests 会自动为 https 建立 CONNECT。要锁 IP 时在 `--raw` 加 `--sid <串>` 即可让这批请求共用同一出口 30 秒。
 
+## 大文件 / 易截断资源：Range 分块下载
+
+本隧道带宽峰值约 5Mbps，一次性拉取大文件（几十 MB 的响应体）容易在代理层被截断（表现为读取中途 `IncompleteRead` 或响应体缺尾）。对这类资源改用 HTTP `Range` 分块：先探测总大小，再按块请求、逐块拼接、校验总长度。
+
+要点：
+- 每块是一次**独立请求**（默认即换 IP），天然规避单次大流量被隧道切断。
+- 分块请求用 `Accept-Encoding: identity` 关闭 gzip，避免 gzip 与 `Range` 冲突。
+- 用 `urllib` + `ProxyHandler` 直接发 `Range` 头；requests 走代理下载大文件时稳定性较差。
+
+```python
+import re, json, time, subprocess, urllib.request
+
+CHUNK = 2 * 1024 * 1024  # 2MB/块
+
+raw = subprocess.run(["ip-tunnel", "export", "--raw"],
+                     capture_output=True, text=True, check=True).stdout
+raw = raw[:raw.rfind("提示：")]
+proxy = json.loads(raw)["proxies"]["https"]
+handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+opener = urllib.request.build_opener(handler)
+
+def range_get(url, start, end, retries=4):
+    req = urllib.request.Request(
+        url, method="GET",
+        headers={"Range": f"bytes={start}-{end}",
+                 "Accept-Encoding": "identity"},
+    )
+    for i in range(retries + 1):
+        try:
+            with opener.open(req, timeout=120) as resp:
+                return resp.status, resp.headers, resp.read()
+        except Exception:
+            if i == retries:
+                raise
+            time.sleep(1.5 * (2 ** i))          # 隧道单次失败是常态，重试而非放弃
+
+def total_size(url):
+    status, headers, _ = range_get(url, 0, 0)   # 用 Range: bytes=0-0 探测总大小
+    if status == 206:
+        m = re.search(r"/(\d+)\s*$", headers.get("Content-Range") or "")
+        if m:
+            return int(m.group(1))
+    raise RuntimeError(f"无法获取大小 HTTP {status}")
+
+def download(url, dest):
+    total = total_size(url)
+    parts, off = [], 0
+    while off < total:
+        end = min(off + CHUNK - 1, total - 1)
+        status, _, body = range_get(url, off, end)
+        if status not in (200, 206) or not body:
+            raise RuntimeError(f"分块下载失败 HTTP {status} [{off}-{end}]")
+        parts.append(body)
+        off += len(body)
+    data = b"".join(parts)
+    if len(data) != total:
+        raise RuntimeError(f"拼接不完整 {len(data)}/{total}")
+    with open(dest, "wb") as f:
+        f.write(data)
+```
+
+> 小文件（< 约 20MB）通常一次整取即可；仅当整取失败或响应体截断时，再回退到上面的分块流程。
+
 ## 锁 IP（同一出口 30 秒）
 
 ```bash
@@ -116,6 +179,6 @@ ip-tunnel ip --sid other                # 换一个 sid 则换 IP
 ## 注意事项
 
 - 凭证只从 OSS 凭证库读取，不接受命令行/环境变量传密钥；`oss://ielym-data/certification/api-key/ip-tunnel/ip-tunnel.json`（服务名 `ip-tunnel`，字段 `tunnel/username/password`）。
-- 本隧道带宽峰值 5Mbps、并发 5 次/s、超带宽为“请求排队”。采集大体积内容时注意带宽顶格。
+- 本隧道带宽峰值 5Mbps、并发 5 次/s、超带宽为“请求排队”。采集大体积内容时注意带宽顶格；大文件（几十 MB）易在代理层被截断，应改用 `Range` 分块下载（见上文《大文件 / 易截断资源：Range 分块下载》）。
 - 快代理官方建议：同一 IP 请求同一网站不超过 1 次/秒，避免被目标屏蔽；关闭 keep-alive（CLI 默认已遵循）。
 - 参考开发者指南：<https://www.kuaidaili.com/doc/dev/tps/>；隧道错误码：<https://www.kuaidaili.com/doc/dev/tpshttpresponse/>。

@@ -29,12 +29,12 @@
 适合场景：
 - 一个 2 天大任务（长期跑，被抢占后续跑）
 - 每天额外抓当天的（每天一个新意图）
-- 多粒度并发（不同优先级/资源的多个进程）
+- 多粒度并发（不同资源需求/不同意图类型的多个进程）
 
 特点：
 - 一个意图 = 一个 oneshot（`OneshotTask`）有限迭代
 - 驱动进程（`controller.py`）作为 daemon，在正确时机 `emit_intent()` 写新意图
-- 不同请求配置不同的 `priority` / `resources`
+- 不同请求配置不同的 `resources`（优先级唯一来自 manifest，意图不可覆盖）
 - **新执行 = 新 request_id**，调度器天然可回溯不同时期的执行方式
 
 ## 模板三：once_migration（一次性）
@@ -62,3 +62,5 @@
 | backoff_base_sec | 5 | 初始退避 |
 | backoff_cap_sec | 300 | 封顶 |
 | not_after | "" | 空=无绝对截止 |
+
+**所有模板默认已内置 H13 进度日志**（启动/每步/结束 `print(..., flush=True)` + `enter_step` 写 progress）——复制后保留这些输出，替换业务函数即可，不要删掉日志。

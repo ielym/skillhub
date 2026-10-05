@@ -48,3 +48,12 @@
 - [ ] 同意图续跑后从断点继续（不重复已完成工作）
 - [ ] 不同时期的执行方式（新意图文件）天然可回溯
 - [ ] `data/runtime/intents_state.json` 完整保留历史状态
+
+## 清单 G：进度可观测（H13）
+
+- [ ] 启动即打印：读到的运行参数（config 内容摘要）、本次要做什么
+- [ ] 每个 step 开始/完成都有 stdout/stderr 输出，且 `flush=True`（或写 stderr）
+- [ ] 总进度：定期打印百分比，并同步 `enter_step(step, progress)` 写 0~1 的 `progress`
+- [ ] 结束时打印成功/失败数量、退出码与原因
+- [ ] 无"静默长跑"：长任务周期内（每个 step / 每 N 条）必有输出
+- [ ] 管理台能看到实时进度：进程 tab 里 tail 到日志文本 + state.json 里的 progress/current_step

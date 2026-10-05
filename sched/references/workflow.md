@@ -39,6 +39,7 @@ SCHED_WORKSPACE=tasks/<id> SCHED_RUN_ID=dev-1 python3 tasks/<id>/run.py
 - [ ] 正常跑通：exit 0
 - [ ] 断点：让 run.py 跑起来，kill -TERM，然后恢复跑，确认从断点续起（不重做）
 - [ ] 资源错误：模拟代理断（exit 101），确认重试
+- [ ] 进度可见：跑的过程中 stdout 有实时输出（`flush=True`），state.json 的 progress 在推进（H13）
 
 ## 阶段 2 上线（双闸自动检查）
 
@@ -62,4 +63,4 @@ SCHED_WORKSPACE=tasks/<id> SCHED_RUN_ID=dev-1 python3 tasks/<id>/run.py
 
 ## 阶段 4 交付验收
 
-**清单**：见 [acceptance.md](acceptance.md)（三张强制清单：闸通过 / 端到端 / 运行画像）。
+**清单**：见 [acceptance.md](acceptance.md)（全部强制清单 A–G，任何一项未勾都不得交付）。

@@ -19,6 +19,8 @@
 | `data/runtime/profiles.json` | 资源画像（声明 + 运行中动态采样） |
 | `data/runtime/ledger.json` | 账本 |
 | `data/runs/<subtask_id>.jsonl` | 运行历史（exit_code / start / finished / 归因） |
+| `data/runs/<subtask_id>/<run_id>.stdout.log` | 该次运行 stdout（管理台 tail 实时看进度） |
+| `data/runs/<subtask_id>/<run_id>.stderr.log` | 该次运行 stderr |
 
 ## 全局 Settings（`data/settings.json`）
 
@@ -27,18 +29,19 @@
   "timezone": "Asia/Shanghai",
   "run_user": "",                       // 空=当前用户；manifest.runtime.user 优先覆盖
   "runner": {
-    "kill_grace_sec": 40,               // SIGTERM → SIGKILL 宽限（秒）
-    "heartbeat_timeout_sec": 120        // 全局心跳超时兜底；manifest.heartbeat.timeout_sec 可覆盖（下限 5）
+    "kill_grace_sec": 10,               // 取消/停止场景 SIGTERM → SIGKILL 宽限（秒）
+    "heartbeat_timeout_sec": 120,       // 全局心跳超时兜底；manifest.heartbeat.timeout_sec 可覆盖（下限 5）
+    "grace_sec": 40                     // 抢占场景 SIGTERM → SIGKILL 宽限（秒）
   },
   "resource": {
-    "overshoot": 1.5,                   // 画像上浮系数
+    "overshoot": 1.2,                   // 画像上浮系数（P95 ×1.2）
     "sample_interval_sec": 3,           // cgroup 采样周期
     "profile_live_interval_sec": 60,    // 运行中动态画像落盘间隔
     "external_safety_margin_mb": 512     // MemAvailable 安全垫
   },
   "web": { "port": 8765, "host": "127.0.0.1" },
   "preempt_exempt_sec": 60,             // 进程启动后抢占保护期（秒）
-  "starvation_sec": 3600,               // 饿死看门狗阈值（1h 等待）
+  "starvation_sec": 60,                 // 饿死看门狗阈值（60s 等待 → 提权到 101 级）
   "hot_reload_sec": 30                  // serve 扫描新任务/重载 manifest 周期
 }
 ```
@@ -46,8 +49,7 @@
 Settings 合并顺序（后者覆盖前者）：
 
 1. config.py 内默认值
-2. 环境变量 `SCHED_SETTINGS_PATH=/path/to/settings.json` 指定
-3. `data/settings.json`（SCHED_HOME 下）
+2. `data/settings.json`（SCHED_HOME 下；缺失时自动写默认值）
 
 ## 任务级 manifest
 
@@ -65,17 +67,21 @@ python3 -m sched register <id>        # 立即跑双闸上线检查
 python3 -m sched start <id>           # 启用 run_mode=manual 的子任务（置 enabled=true）
 python3 -m sched status                # 子任务数、WQ、运行中、账本、意图消费状态
 python3 -m sched process list [sid]   # 子任务的意图清单 + 运行进程
-python3 -m sched process stop <sid> <rid>     # 终止运行中意图（发 SIGTERM）
-python3 -m sched process no-retry <sid> <rid> # 标记不再重试（写 control=no_retry 到 state.json）
+python3 -m sched process stop <sid> <rid>     # 终止运行中意图（把意图文件重命名 .bak 标记"消失"→ 调度器 cancel 进程并置 done）
+python3 -m sched process no-retry <sid> <rid> # 不再重试（同样标记意图消失 → 终结）
+python3 -m sched clear                 # 清空全部调度状态（注册表/WQ/意图/运行历史）
+python3 -m sched clear --delete-requests # 同时清空所有子任务 requests/ 意图文件（保留任务代码）
 python3 -m sched serve                 # 常驻调度循环（自动发现新子任务、热加载 30s）
 python3 -m sched serve --web           # 同时启动内嵌 Web 管理台（默认 127.0.0.1:8765）
 ```
+
+> `process stop` / `no-retry` 是"硬路径"：两者都把意图文件改名 `.bak`，让调度器在扫描时认为意图消失，从而取消运行进程并把意图置 `done`（区别只在记录原因文本）。它们**不**直接发 SIGTERM、也不写 state.json control 段；正常终止请用 SDK `request_stop()` / `no_retry()`（见 [contracts.md](contracts.md)）。
 
 没有 `run` 子命令——**正式执行只能由调度器扫描意图触发**。
 
 ## 启动协议（环境变量注入）
 
-调度器拉起每个意图时注入：`SCHED_SUBTASK_ID` / `SCHED_REQUEST_ID` / `SCHED_RUN_ID` / `SCHED_CONFIG` / `SCHED_TRIGGER` / `SCHED_ATTEMPT` / `SCHED_SCHEDULED_AT` / `SCHED_WORKSPACE`。
+调度器拉起每个意图时注入：`SCHED_SUBTASK_ID` / `SCHED_REQUEST_ID` / `SCHED_RUN_ID` / `SCHED_CONFIG` / `SCHED_TRIGGER`（`auto|retry|resume|second_pass`）/ `SCHED_ATTEMPT` / `SCHED_SCHEDULED_AT` / `SCHED_WORKSPACE` / `SCHED_ERROR_RULES`（manifest 配了 error_rules 时）。
 
 子任务进程用这些 env 判断自己是不是被调度器正确拉起的。
 

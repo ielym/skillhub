@@ -45,7 +45,7 @@
 
 1. **声明虚低**？实际内存峰值 > 声明 × 1.5 → 上调 manifest.resources.memory_mb
 2. **业务逻辑泄漏**？profile 画像持续爬升 → 修内存泄漏
-3. **cgroup 硬限太严**？profile 上浮系数 overshoot 默认 1.5 → 调 settings.resource.overshoot
+3. **cgroup 硬限太严**？profile 上浮系数 overshoot 默认 1.2 → 调 settings.resource.overshoot
 
 ## 意图不重试（本来应该回退重排）
 
@@ -87,4 +87,15 @@
 | `data/runtime/profiles.json` | 资源画像 |
 | `data/runtime/active.json` | 运行中进程清单 |
 | `data/runs/<sid>.jsonl` | 该子任务所有运行历史 |
-| `tasks/<sid>/cache/runs/<rid>/state.json` | 运行时心跳/断点/错误 |
+| `data/runs/<sid>/<run_id>.stdout.log` / `.stderr.log` | 该次运行实时日志（管理台进程 tab 里可 tail；子任务应遵守 H13 及时 flush 输出） |
+| `tasks/<sid>/cache/runs/<run_id>/state.json` | 运行时心跳/断点/错误 |
+
+## 进程长时间没输出（H13 可观测性）
+
+**现象**：管理台里某进程的 stdout 一直为空或卡在同一行，无法判断是干活还是卡死。
+
+**排查**：
+
+1. **日志没 flush？** Python `print()` 默认行缓冲，被重定向到文件后变成块缓冲——必须 `flush=True` 或 `sys.stderr` 才立即可见（见 H13）。
+2. **看心跳**：state.json 的 `heartbeat_at`/`updated_at` 是否持续更新；更新了说明进程活着，只是没打日志。
+3. **看 progress**：state.json 的 `progress` / `current_step`（`enter_step` 写入）是否在推进；推进了说明在干活。

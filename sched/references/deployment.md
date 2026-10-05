@@ -70,9 +70,10 @@ WantedBy=multi-user.target
 | --- | --- |
 | 查看所有子任务状态 | `python3 -m sched status` |
 | 查看意图消费状态 | `python3 -m sched process list` |
-| 终止运行中进程 | `python3 -m sched process stop <sid> <rid>` |
-| 标记不再重试 | `python3 -m sched process no-retry <sid> <rid>` |
-| 注册/上线检查 | `python3 -m sched register <id>` |
+| 终止运行中进程 | `python3 -m sched process stop <sid> <rid>`（硬路径，见 configuration.md） |
+| 标记不再重试 | `python3 -m sched process no-retry <sid> <rid>`（硬路径，见 configuration.md） |
+| 注册/上线检查 | `python3 -m sched register <id>` 或 Web「注册本地任务」 |
+| 清空全部调度状态 | `python3 -m sched clear [--delete-requests]` 或 Web「清空全部」（建议先停服务） |
 | 手动触发 manual 模式子任务 | `python3 -m sched start <id>` |
 | 查看审计日志 | `tail -f data/runtime/decisions.jsonl` |
 | 查看运行历史 | `ls -lt data/runs/*.jsonl` |

@@ -51,9 +51,10 @@ python3 -m sched list                  # 已上线子任务、ok 状态、优先
 python3 -m sched register <id>        # 立即跑双闸上线检查
 python3 -m sched start <id>           # 启用 run_mode=manual 的子任务（置 enabled=true）
 python3 -m sched status                # 子任务数、WQ、运行中、账本、意图消费状态
-python3 -m sched process list [name]  # 子任务的意图清单 + 运行进程
-python3 -m sched process stop <sid> <rid>     # 终止运行中意图
-python3 -m sched process no-retry <sid> <rid> # 标记不再重试
+python3 -m sched process list [name]  # 子任务的意图清单（--json 含运行中进程）
+python3 -m sched process stop <sid> <rid>     # 终止运行中意图（把意图文件标记消失 → 调度器 cancel 进程并置 done）
+python3 -m sched process no-retry <sid> <rid> # 不再重试（同样标记意图消失 → 终结）
+python3 -m sched clear [--delete-requests]    # 清空全部调度状态（注册表/WQ/意图/运行历史；建议先停服务）
 python3 -m sched serve                 # 常驻调度循环（自动发现新子任务、热加载 30s）
 python3 -m sched serve --web           # 同时启动内嵌 Web 管理台
 ```
@@ -62,8 +63,8 @@ python3 -m sched serve --web           # 同时启动内嵌 Web 管理台
 
 | 你的问题 / 任务 | 必读文件 |
 | --- | --- |
-| 从零做一个子任务，按什么流程走 | [workflow.md](references/workflow.md)（四阶段流程）+ [acceptance.md](references/acceptance.md)（三张强制清单） |
-| 哪些事绝对不能做 / 交付红线 | [rules.md](references/rules.md)（铁律 H1–H10 + 红线总表） |
+| 从零做一个子任务，按什么流程走 | [workflow.md](references/workflow.md)（四阶段流程）+ [acceptance.md](references/acceptance.md)（全部强制清单） |
+| 哪些事绝对不能做 / 交付红线 | [rules.md](references/rules.md)（铁律 H1–H13 + 红线总表） |
 | 上线检查（双闸）不过，怎么修 | [gates.md](references/gates.md)（双闸逐条判定与修复） |
 | manifest 怎么写 / 意图文件怎么发 / SDK 怎么用 / 退出码 / control 段 | [contracts.md](references/contracts.md) |
 | settings 参数、CLI 确切行为、数据/日志布局 | [configuration.md](references/configuration.md) |
@@ -72,7 +73,7 @@ python3 -m sched serve --web           # 同时启动内嵌 Web 管理台
 | 子任务跑挂了 / 状态异常怎么排查 | [troubleshooting.md](references/troubleshooting.md) |
 | 起步代码（骨架/场景模板） | [templates.md](references/templates.md) + [assets/](assets/) |
 
-## 铁律索引（H1–H10，违反任一条不得交付）
+## 铁律索引（H1–H13，违反任一条不得交付）
 
 1. **H1 唯一执行通道**：正式执行只能由调度器扫描意图触发；禁止 cron/手工跑/自触发。
 2. **H2 全进程可抢占**：无豁免；daemon/oneshot 都可被高优抢占；被抢必落断点 exit 99。
@@ -84,6 +85,9 @@ python3 -m sched serve --web           # 同时启动内嵌 Web 管理台
 8. **H8 资源如实申报**：manifest 里 resources 必填且有依据；外部资源（代理/配额等）无法统一申报与管理，靠 100/101 自治。
 9. **H9 无密钥、执行面最小**：密钥走 600 权限文件；禁黑名单 env 键与绝对/`..` 路径。
 10. **H10 源码不动、数据不手改**：仅调试清理时按流程编辑数据文件。
+11. **H11 子任务自包含、禁止共享业务代码**：每个 `tasks/<id>/` 独享完整代码，禁止 `tasks/shared/` 或 `sys.path.insert` 共享业务逻辑（SDK `sched_task_sdk` 除外）。
+12. **H12 运行参数写在配置里、禁止文件名反推**：进程跑什么（date/topic/query 等）必须写在意图 `config` 指向的文件里，禁止用 `request_id` 文件名编码参数。
+13. **H13 及时打印进度日志**：所有子任务必须及时把执行进度写到 stdout/stderr（`flush=True`），并同步写 `state.enter_step` 的 progress，供管理台实时观察与 debug；禁止静默长跑。
 
 全文（含每条的细节与原因）见 [rules.md](references/rules.md)。
 
