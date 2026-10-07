@@ -3,10 +3,16 @@
 ## 安装
 
 ```bash
-npm i -g D:\clihub\jiecode
+npm i -g @ielym/jiecode
 ```
 
-CLI 源码在 `D:\clihub\jiecode`。
+本地源码目录安装（开发用）：
+
+```bash
+npm i -g .
+```
+
+CLI 由 `bin/cli.js`（Node 薄封装）转调 `bin/runner.py`（Python 实现）。
 
 ## 配置
 
@@ -19,7 +25,6 @@ CLI 源码在 `D:\clihub\jiecode`。
   "default_provider": "d1jiema",
   "providers": {
     "d1jiema": {
-      "account": "...",
       "api_token": "...",
       "api_base": "https://api.d1jiema.com/zc/data.php"
     }
@@ -81,7 +86,7 @@ jiecode credential-path
   "ok": true,
   "command": "status",
   "provider": "d1jiema",
-  "data": "29.00"
+  "data": "12.50"
 }
 ```
 

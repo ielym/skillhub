@@ -12,20 +12,13 @@ D1 是短信验证码接码平台。本 provider 已通过 `jiecode --provider d
 
 ## 凭证与 OSS
 
-凭证已按 `ielym-certification api-key` provider 约定登记：
-
-```text
-oss://ielym-data/certification/api-key/d1jiema/d1jiema.json
-```
-
-取回命令：
+凭证按 `ielym-certification api-key` provider 约定登记，取回命令：
 
 ```bash
-export IELYM_CERT_OSS_ENDPOINT=oss-cn-wulanchabu.aliyuncs.com
 ielym-certification api-key --name d1jiema --json
 ```
 
-当前机器不在 OSS 同地域 VPC，必须使用公网 Endpoint；如未来运行环境进入对应 VPC，可去掉该环境变量改走内网。
+凭证对象路径为 `oss://<store-bucket>/certification/api-key/d1jiema/d1jiema.json`；Endpoint 由 `ielym-certification` 按运行环境返回（同地域走内网、跨地域走公网）。
 
 ## CLI 示例
 
@@ -46,17 +39,6 @@ jiecode --provider d1jiema history
 | 历史记录 | `queryUsed` | token，每分钟最多一次 |
 
 失败返回统一为 `ERROR:<信息>`。
-
-## 当前账号
-
-- 注册邮箱：`d1verify-482a1fe3@outlook.com`
-- 联系邮箱：同一邮箱
-- 充值：支付宝 29 元
-- 充值后余额：`29.00`
-- 单价：29 元档约 `0.45 元/条`；USDT 最低 19 元档约 `0.6 元/条`
-- API Token：已创建，保存在 OSS 与本地 `~/.config/jiecode/config.json`
-
-密码和 Token 明文只保存在 OSS 凭证库和本地 0600 配置文件中。
 
 ## Token 创建
 
