@@ -1,100 +1,92 @@
-# 配置（configuration）
+# 配置、CLI 与数据/日志布局
 
-## 数据/运行目录（SCHED_HOME）
+## 代码根发现
 
-- 默认：`sched` 包上一级目录（clone 根）
-- 环境变量覆盖：`SCHED_HOME=/some/path`
-- 所有路径相对 SCHED_HOME：
+CLI 按顺序发现代码根：`SCHED_REPO` → `SCHED_HOME` → 当前目录及各级父目录 → `~/scheduler` → 已安装 `sched` 包。
 
-| 路径 | 用途 |
-| --- | --- |
-| `tasks/<subtask_id>/` | 子任务目录（manifest.json + run.py + requests/ + cache/ + results/） |
-| `data/jobs.json` | 注册表（enabled 开关） |
-| `data/settings.json` | 全局 Settings 覆盖（可选） |
-| `data/runtime/scheduler_state.json` | WQ 快照 |
-| `data/runtime/intents_state.json` | 意图消费状态 |
-| `data/runtime/scheduler.lock` | 单实例 flock |
-| `data/runtime/active.json` | 运行中进程清单 |
-| `data/runtime/decisions.jsonl` | 审计日志（enqueue_intent / admit_intent / preempt / exit_decision） |
-| `data/runtime/profiles.json` | 资源画像（声明 + 运行中动态采样） |
-| `data/runtime/ledger.json` | 账本 |
-| `data/runs/<subtask_id>.jsonl` | 运行历史（exit_code / start / finished / 归因） |
-| `data/runs/<subtask_id>/<run_id>.stdout.log` | 该次运行 stdout（管理台 tail 实时看进度） |
-| `data/runs/<subtask_id>/<run_id>.stderr.log` | 该次运行 stderr |
+## 数据布局（SCHED_HOME，默认 sched 包父目录）
 
-## 全局 Settings（`data/settings.json`）
+```
+SCHED_HOME/
+├── config.json                      # 全局配置（control 节奏参数）
+├── tasks/<task_id>/
+│   ├── task.json                    # 任务清单（唯一真源）
+│   ├── producer.py / run.py         # 生产者入口 / 执行入口
+│   ├── config.json                  # 任务业务配置（可选，自包含）
+│   ├── producer_state/state.json    # 生产者游标 + 待发布记录（同一原子写）
+│   ├── outbox/<job_id>.json         # 已就绪作业 JSON
+│   └── receipts/<job_id>.json       # 调度器接收回执
+└── runtime/
+    ├── exec.db                      # SQLite 执行库（jobs/attempts/events/checkpoints/receipts/task_state）
+    ├── scheduler.lock               # 单实例 flock
+    ├── archive/<task_id>/           # 已接收请求归档
+    ├── isolation/<task_id>/         # 异常请求隔离（相同 job_id 内容不同）
+    ├── runs/<attempt_id>/           # 事件 events.jsonl / 控制 control.json / 检查点 checkpoint.json
+    ├── logs/<task_id>/              # 生产者 stdout/stderr 日志
+    └── status.jsonl                 # 状态日志（启动/暂停/退让/终结）
+```
+
+## config.json（全局配置）
 
 ```jsonc
 {
+  "schema_version": 1,
   "timezone": "Asia/Shanghai",
-  "run_user": "",                       // 空=当前用户；manifest.runtime.user 优先覆盖
-  "runner": {
-    "kill_grace_sec": 10,               // 取消/停止场景 SIGTERM → SIGKILL 宽限（秒）
-    "heartbeat_timeout_sec": 120,       // 全局心跳超时兜底；manifest.heartbeat.timeout_sec 可覆盖（下限 5）
-    "grace_sec": 40                     // 抢占场景 SIGTERM → SIGKILL 宽限（秒）
-  },
-  "resource": {
-    "overshoot": 1.2,                   // 画像上浮系数（P95 ×1.2）
-    "sample_interval_sec": 3,           // cgroup 采样周期
-    "profile_live_interval_sec": 60,    // 运行中动态画像落盘间隔
-    "external_safety_margin_mb": 512     // MemAvailable 安全垫
-  },
-  "web": { "port": 8765, "host": "127.0.0.1" },
-  "preempt_exempt_sec": 60,             // 进程启动后抢占保护期（秒）
-  "starvation_sec": 60,                 // 饿死看门狗阈值（60s 等待 → 提权到 101 级）
-  "hot_reload_sec": 30                  // serve 扫描新任务/重载 manifest 周期
+  "control": {
+    "loop_tick_sec": 1.0,               // 主循环 + 事件消费
+    "sample_interval_sec": 2.0,         // 执行资源采样
+    "heartbeat_interval_sec": 5.0,      // 心跳初值
+    "producer_restart_base_sec": 1.0,   // 生产者崩溃退避起点
+    "producer_restart_cap_sec": 30.0,   // 生产者崩溃退避上限
+    "producer_crash_reset_after_sec": 300.0,
+    "start_interval_sec": 1.0,          // 全局启动间隔（错开启动防突发）
+    "grow_observe_sec": 30.0,           // 扩容观察期初值
+    "pause_grace_base_sec": 10.0,       // 暂停宽限节奏初值
+    "pause_grace_max_sec": 60.0,
+    "shortage_retry_base_sec": 5.0,     // 不足重试指数退避起点
+    "shortage_retry_cap_sec": 900.0,
+    "protect_deadline_sec": 300.0,      // 整轮保护截止初值
+    "protect_round_backoff_sec": 60.0,  // 失败保护轮间等待
+    "slow_confidence_sec": 120.0,       // 变慢判定连续证据窗口
+    "recovery_probe_sec": 60.0
+  }
 }
 ```
 
-Settings 合并顺序（后者覆盖前者）：
-
-1. config.py 内默认值
-2. `data/settings.json`（SCHED_HOME 下；缺失时自动写默认值）
-
-## 任务级 manifest
-
-见 [contracts.md](contracts.md) —— manifest.json 是任务唯一清单，双闸自动从它读取。
-
-## 意图文件（v1）
-
-每个新执行 = `tasks/<id>/requests/<request_id>.json`（append-only），schema 见 [contracts.md](contracts.md)。
+节奏/等待/间隔是**控制节奏**，有初始值并可随运行调整，不是任务容量或资源申请。
 
 ## CLI
 
-```bash
-python3 -m sched list                  # 已上线子任务、ok 状态、优先级、资源预估
-python3 -m sched register <id>        # 立即跑双闸上线检查
-python3 -m sched start <id>           # 启用 run_mode=manual 的子任务（置 enabled=true）
-python3 -m sched status                # 子任务数、WQ、运行中、账本、意图消费状态
-python3 -m sched process list [sid]   # 子任务的意图清单 + 运行进程
-python3 -m sched process stop <sid> <rid>     # 终止运行中意图（把意图文件重命名 .bak 标记"消失"→ 调度器 cancel 进程并置 done）
-python3 -m sched process no-retry <sid> <rid> # 不再重试（同样标记意图消失 → 终结）
-python3 -m sched clear                 # 清空全部调度状态（注册表/WQ/意图/运行历史）
-python3 -m sched clear --delete-requests # 同时清空所有子任务 requests/ 意图文件（保留任务代码）
-python3 -m sched serve                 # 常驻调度循环（自动发现新子任务、热加载 30s）
-python3 -m sched serve --web           # 同时启动内嵌 Web 管理台（默认 127.0.0.1:8765）
+| 命令 | 说明 |
+| --- | --- |
+| `sched serve` | 常驻调度循环（前台；SIGTERM/SIGINT 优雅停机） |
+| `sched status [--json]` | 全局状态（生产者 / 动态目标 / 存活 attempt / 队列 / 退让 / 保护对象） |
+| `sched list [--json]` | 已加载任务 |
+| `sched task validate <id>` | 校验 task.json（schema + 入口存在 + 任务目录内） |
+| `sched task enable/disable <id>` | 写 task.json `enabled` |
+| `sched job list [task]` | 作业清单（最近 N 条） |
+| `sched job show <job_id>` | 作业 + attempts |
+| `sched job cancel <job_id>` | 显式取消（运行中先撤进程树） |
+| `sched attempt list [job]` | attempt 清单 |
+| `sched attempt cancel <id>` | 显式取消单个 attempt |
+
+**没有 `run` 子命令** —— 正式执行只能由调度器扫描 outbox 就绪 JSON 触发。
+
+## 运行身份与启动协议
+
+执行进程命令通过参数数组直接启动，不默认经 shell 解释。调度器注入：
+
+```
+SCHED_ATTEMPT_ID / SCHED_JOB_ID / SCHED_TASK_ID / SCHED_TOKEN
+SCHED_RUN_DIR / SCHED_EVENT_FILE / SCHED_CONTROL_FILE / SCHED_CHECKPOINT_FILE
+SCHED_WORKSPACE / SCHED_PROGRESS_SEMVER
 ```
 
-> `process stop` / `no-retry` 是"硬路径"：两者都把意图文件改名 `.bak`，让调度器在扫描时认为意图消失，从而取消运行进程并把意图置 `done`（区别只在记录原因文本）。它们**不**直接发 SIGTERM、也不写 state.json control 段；正常终止请用 SDK `request_stop()` / `no_retry()`（见 [contracts.md](contracts.md)）。
+执行身份 = PID + 进程启动时间 + attempt_id + 执行令牌 + cgroup/进程树归属，PID 复用不会误暂停其他进程。
 
-没有 `run` 子命令——**正式执行只能由调度器扫描意图触发**。
+## 只观测执行进程
 
-## 启动协议（环境变量注入）
-
-调度器拉起每个意图时注入：`SCHED_SUBTASK_ID` / `SCHED_REQUEST_ID` / `SCHED_RUN_ID` / `SCHED_CONFIG` / `SCHED_TRIGGER`（`auto|retry|resume|second_pass`）/ `SCHED_ATTEMPT` / `SCHED_SCHEDULED_AT` / `SCHED_WORKSPACE` / `SCHED_ERROR_RULES`（manifest 配了 error_rules 时）。
-
-子任务进程用这些 env 判断自己是不是被调度器正确拉起的。
-
-## 资源硬限（cgroup v2）
-
-调度器自动为每个运行中进程创建子 cgroup，硬限：
-
-- `memory.high` = 预估 × 1.5（软限节流）
-- `memory.max` = 预估 × 2.5（硬兜底，超限 OOM kill → exit 137）
-- CPU：`cpu.max` = 预估 CPU × 配额窗口
-
-## 心跳与超时
-
-- SDK `SchedTask` 自动维护 state.json.heartbeat_at / updated_at
-- `runner.heartbeat_timeout_sec`（默认 120s）：超时 → 心跳超时判定 → 整组终止
-- `manifest.heartbeat.timeout_sec` 可单任务覆盖（下限 5s）
+- 准入只使用执行进程及其后代的 CPU 时间、实际驻留/cgroup 内存、I/O 计数、压力指标、OOM 证据与业务进展。
+- 生产者不加入执行统计范围；不使用整机 CPU 忙碌率/整机可用内存作为日常准入门禁。
+- 机器可用核数、安装内存与真实容量只作为比较尺度。
+- 无法归因时标为观测不足，减慢执行探索，不以含生产者的全局指标替代。

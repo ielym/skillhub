@@ -1,0 +1,6 @@
+{
+  "topic": "demo",
+  "query": "example business query",
+  "start_key": "2026-01-01",
+  "end_key": "2026-09-30"
+}

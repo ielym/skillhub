@@ -1,92 +1,53 @@
-# 部署（deployment）
+# 部署与日常运维
 
-## 首次部署
+## 环境要求
 
-### 1. 准备 cgroup v2
+- Python 3.10+（项目要求 `>=3.10`）。
+- 可选：cgroup v2（用于执行进程的身份/观测归因；不可用时降级，观测不足阶段减慢探索并记录限制）。
+- SQLite（标准库自带，无需额外安装）。
 
-```bash
-# 确认已启用
-stat -fc %T /sys/fs/cgroup   # 应该显示 cgroup2fs
-# 如果是 v1，切换内核参数 systemd.unified_cgroup_hierarchy=1
-```
-
-### 2. 委派当前用户对 cgroup 的写权限
+## 安装
 
 ```bash
-# 创建 sched 子树
-sudo mkdir /sys/fs/cgroup/sched 2>/dev/null || true
-# 让当前用户可写
-sudo chown -R $(whoami) /sys/fs/cgroup/sched/ 2>/dev/null || \
-  sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null <<< "+cpu +memory"
+git clone <scheduler repo>
+cd scheduler
+pip install -e .
+python3 -m sched list          # 应为 sched (v3)
 ```
 
-### 3. 安装 sched（Python 3.10+）
+CLI（Node 薄封装 `sched`）定位代码仓；或直接用 `python3 -m sched`。
+
+## 启动
 
 ```bash
-cd /mnt/data01/projects/scheduler
-pip install -e .   # 开发模式
+python3 -m sched serve         # 前台常驻；systemd 可直接托管
 ```
 
-### 4. 验证
+- 单实例：`runtime/scheduler.lock` flock 保证只允许一个执行调度实例。
+- SIGTERM/SIGINT 优雅停机：撤执行进程树（先协作暂停再强杀）、停生产者、关库、释放锁。
+- 仅重启调度器默认保持生产者运行；显式整套服务关闭由外部生命周期管理（如 systemd stop），关闭过程依赖生产者持久化进度与事件源回放。
 
-```bash
-python3 -m sched status   # 应该显示 0 个子任务，账本为空
-```
-
-### 5. 作为 systemd 服务常驻（可选）
+## systemd 示例
 
 ```ini
-[Unit]
-Description=sched daemon
-After=network.target
-
 [Service]
-Type=simple
-User=sched-run
-Environment=SCHED_HOME=/mnt/data01/projects/scheduler
-ExecStart=/usr/bin/python3 -m sched serve --web
+WorkingDirectory=/path/to/scheduler
+ExecStart=/usr/bin/python3 -m sched serve
+Environment=SCHED_HOME=/path/to/scheduler
 Restart=on-failure
-RestartSec=5s
-# cgroup 委派：systemd 管理的 cgroup 下再挂 sched 子树
-Delegate=yes
-CPUAccounting=yes
-MemoryAccounting=yes
-
-[Install]
-WantedBy=multi-user.target
 ```
 
-## Web 管理台
+## 数据库与文件系统
 
-默认 `127.0.0.1:8765`（只监听 localhost）。需要暴露到公网：
+- SQLite 执行库与锁放在**验证过语义的本机文件系统**。共享挂载可存任务 JSON；未经验证不可依赖共享挂载上的 SQLite WAL、文件锁或远端文件通知。
+- `outbox`/`producer_state` 在任务目录内，走原子写 + fsync 目录。
 
-1. 修改 `data/settings.json` 的 `web.host` 为 `0.0.0.0`
-2. **加反向代理 + basic auth**（nginx / traefik / cloudflare tunnel 任选）
-3. 禁止直接暴露到公网（管理台有进程停止/终止能力）
+## 日常
 
-## 日常运维
+- `sched status` 每轮关注：生产者存活、动态目标 vs 存活 attempt、退让集合、保护对象、队列长度（观测值非上限）。
+- 资源监控记执行范围实测消耗/趋势/观测缺失；发现延迟、接收→启动延迟、暂停与检查点耗时、保护改善与无效退让。
+- 日志可轮转，但不得删除未完成任务所需的状态/检查点/去重依据。
 
-| 操作 | 命令 |
-| --- | --- |
-| 查看所有子任务状态 | `python3 -m sched status` |
-| 查看意图消费状态 | `python3 -m sched process list` |
-| 终止运行中进程 | `python3 -m sched process stop <sid> <rid>`（硬路径，见 configuration.md） |
-| 标记不再重试 | `python3 -m sched process no-retry <sid> <rid>`（硬路径，见 configuration.md） |
-| 注册/上线检查 | `python3 -m sched register <id>` 或 Web「注册本地任务」 |
-| 清空全部调度状态 | `python3 -m sched clear [--delete-requests]` 或 Web「清空全部」（建议先停服务） |
-| 手动触发 manual 模式子任务 | `python3 -m sched start <id>` |
-| 查看审计日志 | `tail -f data/runtime/decisions.jsonl` |
-| 查看运行历史 | `ls -lt data/runs/*.jsonl` |
+## 公开暴露（无）
 
-## 热重载
-
-- **30s 周期**（`hot_reload_sec`）自动扫描 `tasks/` 目录新子任务 + 重载 manifest
-- 改 manifest 或 run.py 后≤30s 生效，**无需重启 serve**
-- 意图文件随时写入，调度器扫描到立即入队
-
-## 备份建议
-
-- `data/runtime/intents_state.json`：意图消费状态（核心，建议每日快照）
-- `data/runtime/profiles.json`：资源画像（运行中动态采样重建）
-- `data/jobs.json`：注册表（丢了重放 manifest 即可）
-- **不要**定期清 `data/runtime/decisions.jsonl` ——这是完整审计日志
+v3 无内嵌 Web 管理台；全部操作走 CLI。

@@ -1,34 +1,38 @@
-"""骨架：复制后替换 __class__ 名称、steps()、process_step()。
+"""最小执行者骨架：业务处理 + 断点 + 进展 + 完成。
 
-H13 约定（必做）：所有进度都必须实时可见——
-- 启动/每个 step/结束 用 print(..., flush=True) 打 stdout/stderr；
-- 总进度同步写 self.state.enter_step(名称, progress)，progress 0~1；
-- 禁止静默长跑。
+- self.checkpoint(data) 是「落断点 + 查暂停」的统一点，务必在有界步骤边界调用。
+- 有限任务最后 self.complete(...)。
 """
+from __future__ import annotations
 
 import os
 import sys
-from sched_task_sdk import OneshotTask, DaemonTask, run_task
+from pathlib import Path
+
+_SCHED_SRC = os.environ.get("SCHED_SRC", "/mnt/data01/projects/scheduler")
+if _SCHED_SRC and os.path.isdir(_SCHED_SRC) and _SCHED_SRC not in sys.path:
+    sys.path.insert(0, _SCHED_SRC)
+
+from sched_task_sdk import ExecutorTask, run_task  # noqa: E402
 
 
-class MyTask(OneshotTask):   # 或 DaemonTask
-    """在这里写业务类名。"""
+class MyExecutor(ExecutorTask):
+    def execute(self):
+        done = self.resume_data() or []     # 断点恢复
+        total = 10
+        for i in range(total):
+            if i in done:
+                continue
+            # 业务处理（幂等）...
+            done.append(i)
+            self.checkpoint(done)           # 落断点 + 查暂停
+            self.report_progress(len(done), True, "process", work_units=len(done))
+        self.complete({"count": len(done)})  # 提交完成记录
 
-    def steps(self):
-        """yield 每个要处理的单元。"""
-        # yield None  # oneshot 空跑
-        # while True: yield None  # daemon 常驻
-        raise NotImplementedError("必须实现 steps()")
 
-    def process_step(self, step):
-        """处理一个 step。"""
-        self.state.enter_step(f"处理 {step}", 0.5)   # 进度（0~1）+ 当前步骤，管理台可见
-        print(f"[progress] 处理 {step}...", flush=True)
-        self.save_checkpoint({"done": [step]})
-        # 心跳由 SDK 心跳线程自动维护，无需手动调用
+def main() -> int:
+    return run_task(MyExecutor())
 
 
 if __name__ == "__main__":
-    print(f"[start] 任务启动 subtask={os.environ.get('SCHED_SUBTASK_ID', '?')} "
-          f"run_id={os.environ.get('SCHED_RUN_ID', '?')}", flush=True)
-    run_task(MyTask())
+    sys.exit(main())

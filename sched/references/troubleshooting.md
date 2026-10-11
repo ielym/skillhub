@@ -1,101 +1,36 @@
-# 故障排查（troubleshooting）
+# 排查手册
 
-## 意图没被消费
+## 看状态
 
-**现象**：`requests/<rid>.json` 写了很久，但 `process list` 里状态还是 `pending` 或没记录。
+```bash
+sched status                # 生产者存活 / 队列 / 存活 attempt / 动态目标 / 退让 / 保护对象
+sched list                  # 任务与优先级
+sched job list <task>       # 该任务作业
+sched job show <job_id>     # 作业状态 + attempts + reason
+sched attempt list <job>    # attempt 历史（exit_code / status）
+```
 
-**排查步骤**：
+## 常见症状
 
-1. **闸失败了？** `sched register <sid>` 看输出
-   - 闸1 manifest 解析失败 → 看 Web 管理台 `error` 字段修 manifest.json
-   - 闸2 契约失败 → 本地 `python3 run.py` 裸跑复现
-
-2. **run_mode=manual 未启用？** `data/jobs.json` 里 `enabled` 应该是 true；false 时用 `sched start <sid>`
-
-3. **账本满了？** `sched status` 看 ledger 预留；如果所有进程账本加起来接近机器上限 → 等其他任务结束 / 抢低优
-
-4. **指纹冲突 rejected？** 看 `intents_state.json` 里 `rejected_reason`，新执行必须是新 request_id 文件
-
-## 进程被频繁抢占
-
-**现象**：daemon 频繁 exit 99 后又起来，反复打断业务。
-
-**排查**：
-
-1. **自己优先级太低**？调 manifest 的 priority（0~100，越高越不容易被抢）
-2. **有高优任务在排队**？`status` 看 WQ，高优任务在等容量 → 等它起来
-3. **画像太保守**？声明资源申报偏保守 → 调 resources 或等画像收敛
-
-## 进程卡住（心跳超时）
-
-**现象**：monitor 判定 heartbeat_kill。
-
-**排查**：
-
-1. SDK 心跳线程正常跑吗？state.json.heartbeat_at 有没有持续更新
-2. heartbeat_timeout_sec 设得太短？manifest 里调大
-3. cgroup memory.max 硬限位导致 OOM kill → exit 137？看 exit 码
-4. 外部资源阻塞没超时？加 timeout 机制（别让进程一直卡在等待网络）
-
-## 进程 OOM
-
-**现象**：exit 137 / -9 / 审计日志 `overload_preempt`。
-
-**排查**：
-
-1. **声明虚低**？实际内存峰值 > 声明 × 1.5 → 上调 manifest.resources.memory_mb
-2. **业务逻辑泄漏**？profile 画像持续爬升 → 修内存泄漏
-3. **cgroup 硬限太严**？profile 上浮系数 overshoot 默认 1.2 → 调 settings.resource.overshoot
-
-## 意图不重试（本来应该回退重排）
-
-**现象**：exit 100/101 但意图直接 done，没回退 pending。
-
-**排查**：
-
-1. **SDK 写了 no_retry control 段？** state.json 里看 control.action（no_retry 会终结意图）
-2. **SDK 写了 stop control 段？** 进程主动 stop 也会终结
-3. **意图文件被删除了？** 文件消失 → 意图 done
-
-## 被抢占后没恢复（断点丢了）
-
-**现象**：抢占后新进程从开头跑，重做了已完成的工作。
-
-**排查**：
-
-1. **SDK 断点有没有保存？** 抢占前 state.json 的 resume_point 字段存在吗
-2. **resume_point.json 丢了？** tasks/<id>/cache/resume_point.json 应该有最后一次保存的断点
-3. **daemon 里 steps() 没循环？** 抢占后 resume → 重新进入 `while True`，应该从断点位置继续 yield
-
-## 审计日志看不到想要的事件
-
-**现象**：`decisions.jsonl` 里没有某次 preempt / exit_decision。
-
-**排查**：
-
-1. **文件没 flush？** `store.py` 是原子写 + 轮转，正常情况下立即可见
-2. **路径被 `_ignore` 列表过滤了？** scanner 会跳过 `_dev/` 等目录
-3. **serve 进程重启过？** 审计日志不会丢失，但重启前最后几条可能在轮转中
-
-## 核心排查文件一览
-
-| 文件 | 看什么 |
+| 症状 | 排查 |
 | --- | --- |
-| `data/runtime/intents_state.json` | 每个意图的状态、指纹、run_id、rejected_reason |
-| `data/runtime/decisions.jsonl` | 所有调度决策（enqueue / admit / preempt / exit） |
-| `data/runtime/ledger.json` | 当前账本预留 |
-| `data/runtime/profiles.json` | 资源画像 |
-| `data/runtime/active.json` | 运行中进程清单 |
-| `data/runs/<sid>.jsonl` | 该子任务所有运行历史 |
-| `data/runs/<sid>/<run_id>.stdout.log` / `.stderr.log` | 该次运行实时日志（管理台进程 tab 里可 tail；子任务应遵守 H13 及时 flush 输出） |
-| `tasks/<sid>/cache/runs/<run_id>/state.json` | 运行时心跳/断点/错误 |
+| 作业一直 QUEUED 不启动 | 是否达动态目标（`status` 的 scale 段）；是否在退让/冷却；是否资源观测接近饱和；`attempt list` 看是否已有存活 attempt 未退出 |
+| 作业 BACKOFF 反复 | 执行者持续报 `external_shortage`：看 `job show` reason；日志在 `runtime/logs/<task>/`；确认不足可恢复而非永久（永久失败不应报不足） |
+| 作业 FAILED | 业务逻辑错误或未知失败：看 stdout/stderr 与 attempt reason；修复后由生产者重放或重发新作业 |
+| 生产者反复崩溃 | `status` 的 producers crash 计数；日志 `runtime/logs/<task>/producer.stderr.log`；崩溃退避在一次次加长 |
+| 暂暂停后恢复重跑已完成工作 | 检查检查点是否周期提交、幂等键是否稳定；`runtime/runs/<attempt_id>/checkpoint.json` |
+| 有孤儿进程 | 取消/暂停后进程树是否确认退出（cgroup 内 `cgroup.procs`）；重启接管会核实身份 |
+| RECOVERING 卡住 | 退出 0 但无 `completed` 记录；确认执行者 `complete()` 被调用；或显式取消 |
 
-## 进程长时间没输出（H13 可观测性）
+## 关键文件位置
 
-**现象**：管理台里某进程的 stdout 一直为空或卡在同一行，无法判断是干活还是卡死。
+- 执行事件：`runtime/runs/<attempt_id>/events.jsonl`
+- 暂停命令：`runtime/runs/<attempt_id>/control.json`
+- 检查点：`runtime/runs/<attempt_id>/checkpoint.json`
+- 状态日志：`runtime/status.jsonl`
+- 审计（接收/隔离）：`runtime/isolation/`、`runtime/archive/`
 
-**排查**：
+## 数据清理（仅调试，建议先停服务）
 
-1. **日志没 flush？** Python `print()` 默认行缓冲，被重定向到文件后变成块缓冲——必须 `flush=True` 或 `sys.stderr` 才立即可见（见 H13）。
-2. **看心跳**：state.json 的 `heartbeat_at`/`updated_at` 是否持续更新；更新了说明进程活着，只是没打日志。
-3. **看 progress**：state.json 的 `progress` / `current_step`（`enter_step` 写入）是否在推进；推进了说明在干活。
+- 清空全部调度状态：删除 `runtime/exec.db` 与各任务 `outbox/`、`producer_state/`（谨慎：会丢游标与未完成作业记录）。
+- 单作业重置：`sched job cancel <job_id>` 后由生产者按稳定标识重放。

@@ -1,59 +1,43 @@
-# 验收清单（acceptance）
+# 交付验收清单
 
-交付前必须全部打勾；任何没打勾的都是阻塞项。
+交付前逐项确认。任一条不满足 = 不通过。
 
-## 清单 A：双闸上线通过
+## 生产者
 
-- [ ] 闸1 静态通过（manifest schema 合法）
-- [ ] 闸2 契约通过（dry 跑通、exit 0）
-- [ ] `data/jobs.json` 中对应条目 `enabled=true`
-- [ ] 管理台 Web 或 `sched status` 里子任务 `ok=true`
+- [ ] 常驻；发现工作与调度器解耦（调度器停止/库不可写时仍持久化+发布）。
+- [ ] 先持久化「游标 + 待发布记录」同一原子写，再原子发布正式 JSON，成功后才标记已发布。
+- [ ] 作业标识由（任务标识 + 稳定事件标识 + 业务版本）确定，重放得到同一 job_id。
+- [ ] 重启可重放未确认作业并补扫（recovery 字段如实说明保留/回放/遗漏识别）。
 
-## 清单 B：端到端链路
+## 执行者
 
-- [ ] scan 到新意图 → 入队 pending
-- [ ] admission_scan 判定可准出 → admit
-- [ ] runner 拉起进程 → exit 0 → 意图 `done`
-- [ ] 进程 exit 100 → 意图 `pending`（retry）+ 退避
-- [ ] kill -TERM 运行中进程 → exit 99 → 意图 `pending`（resume）
-- [ ] SDK `request_stop()` → 意图 `done`
-- [ ] SDK `no_retry()` → 进程退出后不再 retry
-- [ ] 意图文件改写（指纹变）→ rejected
-- [ ] 意图文件消失 → done
+- [ ] 继承 `ExecutorTask`，注入 `SCHED_*` 环境变量下运行。
+- [ ] 心跳（存活）与进展（推进）分开上报。
+- [ ] 进展给单调递增已完成单元数 + 是否仍有未完成工作 + 业务阶段 + 指标语义版本。
+- [ ] 周期提交检查点（不只暂停时）；检查点原子写、含格式版本/输入标识/业务版本/进度/提交编号。
+- [ ] 幂等提交：稳定幂等键 + 可核实提交记录；重复执行未确认单元不产生重复有效结果。
+- [ ] 外部不足及时报 `external_shortage` 并 exit 75；业务逻辑错误不冒充不足。
+- [ ] 退出 0 必提交 `completed` 完成记录。
+- [ ] 协作暂停：收命令 → 停新工作 → 原子提交检查点 → control_ack + checkpoint → 退出。
 
-## 清单 C：运行画像
+## 配置与自包含
 
-- [ ] 首次运行后资源消耗被 cgroup 动态采样记录（运行几次后画像收敛）
-- [ ] 资源画像写入 `data/runtime/profiles.json`
-- [ ] 运行历史记录落盘 `data/runs/<subtask_id>.jsonl`（exit_code、start/finished 时间）
-- [ ] 决策审计落盘 `data/runtime/decisions.jsonl`（enqueue_intent / admit_intent / preempt / exit_decision）
+- [ ] `task.json` 无运行上限/排队上限/资源申请；`priority` 合理。
+- [ ] 任务目录自包含（producer.py + run.py + 配置），不共享业务代码。
+- [ ] 运行参数写在就绪 JSON 引用的配置文件里，不用 job_id 文件名反推。
+- [ ] 本地不记录外部资源（接口/账号/隧道/配额/资源指纹）。
 
-## 清单 D：资源协调正确
+## 行为验收
 
-- [ ] 高优等待 + 低优运行 + 账本满 → 抢占低优
-- [ ] 抢占后账本释放 → 高优下一轮准出
-- [ ] 抢占者 60s 保护期 → 不被再抢
-- [ ] 同优先级不互相抢占
+- [ ] `sched task validate <id>` 通过。
+- [ ] `sched serve` 后生产者存活、作业从 QUEUED → RUNNING → SUCCEEDED（或长期任务持续进展）。
+- [ ] 暂停演练：PAUSING → PAUSED，恢复后从最近检查点续跑不重复已完成工作。
+- [ ] 不足演练：exit 75 → BACKOFF，恢复后继续。
+- [ ] 进程树回收：取消/暂停后整个执行进程树退出，无孤儿。
 
-## 清单 E：安全与合规
+## 能力边界（明确保留，不通过加隐含上限改变约束）
 
-- [ ] 密钥不在 manifest/state.json/日志里
-- [ ] 所有入口文件路径相对任务目录（无 `..`、无绝对路径）
-- [ ] 外部 env 黑名单键（LD_PRELOAD 等）未注入
-- [ ] `chmod 600` 密钥文件
-
-## 清单 F：可恢复 / 可回溯
-
-- [ ] 被抢占进程 exit 99 后，断点文件存在且包含已完成位点
-- [ ] 同意图续跑后从断点继续（不重复已完成工作）
-- [ ] 不同时期的执行方式（新意图文件）天然可回溯
-- [ ] `data/runtime/intents_state.json` 完整保留历史状态
-
-## 清单 G：进度可观测（H13）
-
-- [ ] 启动即打印：读到的运行参数（config 内容摘要）、本次要做什么
-- [ ] 每个 step 开始/完成都有 stdout/stderr 输出，且 `flush=True`（或写 stderr）
-- [ ] 总进度：定期打印百分比，并同步 `enter_step(step, progress)` 写 0~1 的 `progress`
-- [ ] 结束时打印成功/失败数量、退出码与原因
-- [ ] 无"静默长跑"：长任务周期内（每个 step / 每 N 条）必有输出
-- [ ] 管理台能看到实时进度：进程 tab 里 tail 到日志文本 + state.json 里的 progress/current_step
+- 纯执行侧观测不能完全覆盖机器上其他程序的竞争。
+- 没有资源身份不能精确识别跨任务争用。
+- 动态探索不能保证第一次启动永不超载。
+- 任务不丢失依赖生产者持久化 + 数据源可回放；业务结果不重复依赖检查点 + 幂等提交。

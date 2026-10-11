@@ -1,0 +1,5 @@
+{
+  "topic": "demo",
+  "query": "example business query",
+  "run_at_hour": 15
+}

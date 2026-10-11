@@ -1,66 +1,53 @@
-# 标准流程（workflow）
+# 子任务开发流程（四阶段）
 
 ## 阶段 0 设计
 
-**产物**（必须先想清楚，否则进不了阶段 1）：
+定清楚之后才开始写：
 
-- [ ] 子任务 id（字母数字下划线短横，≤ 64 位）
-- [ ] run_mode：auto（注册即消费意图）/ manual（显式 start 后消费）
-- [ ] priority（0~100）
-- [ ] resources（CPU / 内存，声明值作为初次准入下界）
-- [ ] kind：daemon（常驻）/ oneshot（一次跑完）
-- [ ] 意图策略：
-  - 场景一（每天 1 个）：`run.py` 用 `DaemonTask` + SDK `emit_intent` 每天早上写一个新意图，或用单个 daemon 直接在 `steps()` 里跑
-  - 场景二（2 天大任务 + 每天跑）：`controller.py` 作为驱动，按天 `emit_intent(kind="oneshot")`
-- [ ] 资源外部依赖：代理/VPN/API 配额——按 100/101 退出码自分类，意图 lifetime.retry 自治
-- [ ] 错误分类规则：哪些是 resource（可重试），哪些是 logic（转人工）
+- **id**：`<domain>_<variant>`，字母数字下划线短横，不与现有任务冲突。
+- **优先级**：数字越大越优先（默认作业继承任务优先级）。
+- **生产者发现逻辑**：什么事件触发、稳定事件标识是什么、业务版本怎么定、如何幂等（同一事件重放得到同一 job_id）。
+- **执行者断点与进展**：一个作业的单元是什么，进度怎么归一化，断点数据存什么，幂等键是什么。
+- **数据源可回放性**：数据源保留多久、如何重放、如何识别遗漏（写进 task.json `recovery`）。
+- **选模板**：daily 生产者 / 批量回溯 / 长期任务，见 [templates.md](templates.md)。
 
-**模板选择**（`assets/templates/`）：
+## 阶段 1 本地裸进程调试（`_dev`）
 
-| 模板 | 场景 |
-| --- | --- |
-| `daemon` | 单进程常驻循环；一个意图配一个 daemon；场景一 |
-| `multi_process_driver` | 驱动进程按需 emit_intent；场景二 |
-| `once_migration` | 一次性迁移任务；one-shot |
-
-## 阶段 1 本地裸进程调试
-
-**目录建议**：`tasks/<id>/_dev/` 里放临时调试脚本，正式 run.py 不进。
-
-跑法：
+在任务目录外建 `_dev/`，直接跑生产者和执行者，验证业务逻辑：
 
 ```bash
-# 裸进程（不走调度器）
-SCHED_WORKSPACE=tasks/<id> SCHED_RUN_ID=dev-1 python3 tasks/<id>/run.py
+SCHED_WORKSPACE=$PWD/_dev SCHED_TASK_ID=my_task SCHED_DEV=1 python3 producer.py
+SCHED_DEV=1 SCHED_EVENT_FILE=/tmp/ev.jsonl SCHED_CHECKPOINT_FILE=/tmp/cp.json \
+  SCHED_WORKSPACE=$PWD/_dev python3 run.py
 ```
 
-**必做演练**：
+必须演练：**断点恢复**（中途 SIGTERM 后重启续跑）+ **协作暂停**（收暂停命令后安全退出）。
 
-- [ ] 正常跑通：exit 0
-- [ ] 断点：让 run.py 跑起来，kill -TERM，然后恢复跑，确认从断点续起（不重做）
-- [ ] 资源错误：模拟代理断（exit 101），确认重试
-- [ ] 进度可见：跑的过程中 stdout 有实时输出（`flush=True`），state.json 的 progress 在推进（H13）
+## 阶段 2 放入 `tasks/<id>/`，调度器自动守护
 
-## 阶段 2 上线（双闸自动检查）
+```
+tasks/<id>/
+├── task.json        # 清单（producer_entry / executor_entry / priority / recovery）
+├── producer.py      # 生产者（继承 Producer）
+├── run.py           # 执行者（继承 ExecutorTask）
+└── config.json      # 业务配置（可选）
+```
 
-1. 放入 `tasks/<id>/`：至少 manifest.json + run.py
-2. 若 run_mode=auto → 调度器热加载到就开检（30s）；也可手动：
-   ```bash
-   python3 -m sched register <id>
-   ```
-3. 闸全部通过 → jobs.json 启用，调度器开始扫描 requests/
-4. 闸失败 → Web 管理台或 `sched status` 看原因，修 manifest/run.py 后自动重检
+```bash
+sched task validate <id>   # 离线校验 task.json
+sched serve                # 起调度：自动守护生产者，接收 outbox → 存执行库 → 平缓拉起执行进程
+sched status               # 看生产者存活、动态目标、队列
+sched job show <job_id>    # 看作业状态与 attempt
+```
 
-## 阶段 3 跑通意图流程
+## 阶段 3 跑通完整流程 + 恢复演练
 
-**必做**：
-
-- [ ] 创建 requests/ 目录
-- [ ] 至少一个意图文件（或驱动进程能 `emit_intent`）
-- [ ] 跑通 scan → admit → run → exit 完整链路
-- [ ] 跑通被抢占恢复（kill -TERM 主进程，确认 exit 99 后续跑）
-- [ ] 跑通 `no_retry` / `request_stop` / `reschedule` 三条控制协议
+1. 生产者发布就绪 JSON → `sched job list` 出现 QUEUED。
+2. 调度器拉起执行进程 → RUNNING → 进展事件递增。
+3. 有限任务完成 → SUCCEEDED；长期任务持续进展参与观测。
+4. 演练：`sched job cancel` / 高优保护退让，验证 PAUSING→PAUSED 与断点续跑。
+5. 演练：制造外部不足（断网/限流）→ exit 75 → BACKOFF → 恢复后继续。
 
 ## 阶段 4 交付验收
 
-**清单**：见 [acceptance.md](acceptance.md)（全部强制清单 A–G，任何一项未勾都不得交付）。
+只认「调度触发成功」的交付。见 [acceptance.md](acceptance.md)。

@@ -1,66 +1,66 @@
-# 场景模板选择指南（templates）
+# 起步代码与场景模板
 
-模板在 `assets/templates/` 下，每个模板一个目录，包含：
+模板在 `assets/` 下。所有模板为最小可运行示例，业务逻辑留白，请按真实业务填写。
 
-- `run.py` — 业务入口（继承 SDK 基类）
-- `manifest.json` — 子任务清单（schema_version=3）
-- 可选：`requests/` 示例意图文件
-
-| 模板 | 场景 | kind | 说明 |
-| --- | --- | --- | --- |
-| `daemon` | 单进程常驻循环 | daemon | 每天 1 个、每小时 1 个、持续监控类；一个意图 = 一个 daemon；内部 `while True` + 断点 |
-| `multi_process_driver` | 驱动进程按需 emit_intent | 混合型 | 大任务 + 日更并行、多粒度；一个意图 = 一个 oneshot；由 `controller.py` 驱动写新意图 |
-| `once_migration` | 一次性迁移 | oneshot | 跑完自然退出；daemon/oneshot 选哪个取决于"跑完了要不要继续守护" |
-
-## 模板一：daemon（单进程常驻）
-
-适合场景：
-- 每天抓一次当天论文
-- 每小时同步一次数据镜像
-- 持续监控某个指标，异常时告警
-
-特点：
-- 一个意图 = 一个 `DaemonTask` 常驻循环
-- `steps()` 里 `while True`：跑一次业务逻辑 → 落断点 → `yield`
-- 进程退出靠 SDK 调用（`request_stop` / `exit`）或被高优抢占
-
-## 模板二：multi_process_driver（驱动进程按需起）
-
-适合场景：
-- 一个 2 天大任务（长期跑，被抢占后续跑）
-- 每天额外抓当天的（每天一个新意图）
-- 多粒度并发（不同资源需求/不同意图类型的多个进程）
-
-特点：
-- 一个意图 = 一个 oneshot（`OneshotTask`）有限迭代
-- 驱动进程（`controller.py`）作为 daemon，在正确时机 `emit_intent()` 写新意图
-- 不同请求配置不同的 `resources`（优先级唯一来自 manifest，意图不可覆盖）
-- **新执行 = 新 request_id**，调度器天然可回溯不同时期的执行方式
-
-## 模板三：once_migration（一次性）
-
-适合场景：
-- 迁移脚本（跑完就结束，不需要守护）
-- 一次性数据修复任务
-
-特点：
-- 一个意图 = 一个 oneshot
-- 跑完 exit 0 就 done，不需要守护
-- 如果希望"跑完自动再次跑" → 用 daemon 或 multi_process_driver
-
-## 模板通用字段
-
-| manifest 字段 | 推荐值 | 说明 |
+| 模板 | 场景 | 文件 |
 | --- | --- | --- |
-| run_mode | auto | 注册即消费意图；manual 适合需要显式运维启动的场景 |
-| priority | 20~60 | 高优 80+ 会抢占低优 |
-| resources | cpu=0.1~1, memory_mb=64~2048 | 如实申报；运行后按画像动态调 |
-| runtime.user | sched-run | 部署用户；本地开发可空 |
+| skeleton | 最小生产者 + 执行者骨架 | [assets/skeleton](assets/skeleton) |
+| 01_daily_producer | 每日定时发现（如每日抓取 T-2） | [assets/templates/01_daily_producer](assets/templates/01_daily_producer) |
+| 02_batch_backfill | 批量回溯（有限日期/ID 范围，幂等跳过已完成） | [assets/templates/02_batch_backfill](assets/templates/02_batch_backfill) |
+| 03_longtask | 长期任务（持续进展，无完成事件参与调度） | [assets/templates/03_longtask](assets/templates/03_longtask) |
 
-| 意图 lifetime.retry 字段 | 推荐值 | 说明 |
-| --- | --- | --- |
-| backoff_base_sec | 5 | 初始退避 |
-| backoff_cap_sec | 300 | 封顶 |
-| not_after | "" | 空=无绝对截止 |
+每个模板含 `task.json`、`config.json`（可选）、`producer.py`、`run.py`，自包含（不含外部依赖）。
 
-**所有模板默认已内置 H13 进度日志**（启动/每步/结束 `print(..., flush=True)` + `enter_step` 写 progress）——复制后保留这些输出，替换业务函数即可，不要删掉日志。
+## 起步骨架（skeleton/）
+
+`task.json`：
+
+```json
+{ "schema_version": 1, "task_id": "my_task", "enabled": true, "priority": 50,
+  "producer_entry": { "file": "producer.py", "interpreter": "python3", "args": [], "cwd": "." },
+  "executor_entry": { "file": "run.py", "interpreter": "python3", "args": [], "cwd": "." },
+  "workdir": ".", "progress_semver": "1.0.0",
+  "recovery": { "replay": "outbox", "retain": "说明数据源保留", "replay_note": "说明遗漏识别" } }
+```
+
+`producer.py` 最小实现（见 [contracts.md](contracts.md) §7）：
+
+```python
+from sched_task_sdk import Producer, run_producer
+
+class MyProducer(Producer):
+    def discover(self, cursor):
+        if cursor is not None:            # 已发布过 → 不再发布
+            return cursor, []
+        return {"published": True}, [{"event_id": "round-1", "business_version": "1",
+                                      "input_refs": [], "idempotency_key": "k",
+                                      "env": {}, "entry_args": []}]
+
+run_producer(MyProducer(), tick_sec=60)
+```
+
+`run.py` 最小实现（见 [contracts.md](contracts.md) §8）：
+
+```python
+from sched_task_sdk import ExecutorTask, run_task
+
+class MyExecutor(ExecutorTask):
+    def execute(self):
+        done = self.resume_data() or []
+        for i in range(10):
+            if i in done:
+                continue
+            # 业务处理（幂等）...
+            done.append(i)
+            self.checkpoint(done)                              # 落断点 + 查暂停
+            self.report_progress(len(done), True, "process", work_units=len(done))
+        self.complete({"count": len(done)})
+
+run_task(MyExecutor())
+```
+
+## 关键注意
+
+- 生产者 `discover()` 返回 `(new_cursor, [publish_spec...])`；`cursor` 用于去重，不用它外推业务时间。
+- 执行者 `self.checkpoint(...)` 是「落断点 + 查暂停」的统一点，务必在有界步骤边界调用。
+- 有限任务必须 `self.complete(...)`；长期任务持续 `report_progress`、无需 complete。
