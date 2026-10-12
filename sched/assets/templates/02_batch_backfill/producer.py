@@ -10,11 +10,11 @@ import os
 import sys
 from pathlib import Path
 
-_SCHED_SRC = os.environ.get("SCHED_SRC", "/mnt/data01/projects/scheduler")
+_SCHED_SRC = os.environ.get("SCHED_SRC", "")
 if _SCHED_SRC and os.path.isdir(_SCHED_SRC) and _SCHED_SRC not in sys.path:
     sys.path.insert(0, _SCHED_SRC)
 
-from sched_task_sdk import Producer, run_producer  # noqa: E402
+from sched_task_sdk import Producer, atomic_write_json, run_producer  # noqa: E402
 
 
 def _ws() -> Path:
@@ -50,9 +50,10 @@ class BackfillProducer(Producer):
             rel = f"config/units/{key}.json"
             d = _ws() / "config" / "units"
             d.mkdir(parents=True, exist_ok=True)
-            (d / f"{key}.json").write_text(json.dumps(
-                {"topic": cfg.get("topic"), "key": key, "query": cfg.get("query")},
-                ensure_ascii=False, indent=2), encoding="utf-8")
+            # C4：per-unit 配置原子写——半写文件被 worker 读到截断 JSON 会误判业务失败
+            atomic_write_json(d / f"{key}.json",
+                              {"topic": cfg.get("topic"), "key": key,
+                               "query": cfg.get("query")})
             jobs.append({
                 "event_id": key, "business_version": "1",
                 "input_refs": [rel], "idempotency_key": f"{cfg.get('topic')}:{key}",

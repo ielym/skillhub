@@ -18,7 +18,7 @@
 ```bash
 SCHED_WORKSPACE=$PWD/_dev SCHED_TASK_ID=my_task SCHED_DEV=1 python3 producer.py
 SCHED_DEV=1 SCHED_EVENT_FILE=/tmp/ev.jsonl SCHED_CHECKPOINT_FILE=/tmp/cp.json \
-  SCHED_WORKSPACE=$PWD/_dev python3 run.py
+  SCHED_CONTROL_FILE=/tmp/ctl.json SCHED_WORKSPACE=$PWD/_dev python3 run.py
 ```
 
 必须演练：**断点恢复**（中途 SIGTERM 后重启续跑）+ **协作暂停**（收暂停命令后安全退出）。

@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-_SCHED_SRC = os.environ.get("SCHED_SRC", "/mnt/data01/projects/scheduler")
+_SCHED_SRC = os.environ.get("SCHED_SRC", "")
 if _SCHED_SRC and os.path.isdir(_SCHED_SRC) and _SCHED_SRC not in sys.path:
     sys.path.insert(0, _SCHED_SRC)
 
@@ -38,7 +38,8 @@ class UnitExecutor(ExecutorTask):
         self.report_progress(0, True, "start")
         # 幂等：先查外部完成标记，再处理
         self._process(cfg)
-        self.checkpoint({"done": True})
+        self.checkpoint({"done": True}, business_version=cfg.get("version") or "1",
+                        progress={"done": 1})
         self.report_progress(1, False, "done", work_units=1)
         self.complete({"key": key, "count": 1})
 

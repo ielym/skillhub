@@ -3,8 +3,8 @@
   "task_id": "batch_backfill",
   "enabled": true,
   "priority": 30,
-  "producer_entry": { "file": "producer.py", "interpreter": "python3", "args": [], "cwd": "." },
-  "executor_entry": { "file": "run.py", "interpreter": "python3", "args": [], "cwd": "." },
+  "producer_entry": { "file": "producer.py", "interpreter": "python3", "args": [] },
+  "executor_entry": { "file": "run.py", "interpreter": "python3", "args": [] },
   "workdir": ".",
   "progress_semver": "1.0.0",
   "recovery": { "replay": "outbox", "retain": "数据源保留说明", "replay_note": "以单元稳定标识幂等去重" }

@@ -12,11 +12,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-_SCHED_SRC = os.environ.get("SCHED_SRC", "/mnt/data01/projects/scheduler")
+_SCHED_SRC = os.environ.get("SCHED_SRC", "")
 if _SCHED_SRC and os.path.isdir(_SCHED_SRC) and _SCHED_SRC not in sys.path:
     sys.path.insert(0, _SCHED_SRC)
 
-from sched_task_sdk import Producer, run_producer  # noqa: E402
+from sched_task_sdk import Producer, atomic_write_json, run_producer  # noqa: E402
 
 BEIJING = ZoneInfo("Asia/Shanghai")
 
@@ -43,9 +43,10 @@ class DailyProducer(Producer):
         rel = f"config/dates/{target}.json"
         d = _ws() / "config" / "dates"
         d.mkdir(parents=True, exist_ok=True)
-        (d / f"{target}.json").write_text(json.dumps({
+        # C4：per-date 配置原子写——半写文件被 worker 读到截断 JSON 会误判业务失败
+        atomic_write_json(d / f"{target}.json", {
             "topic": cfg.get("topic"), "date": target, "query": cfg.get("query"),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        })
 
         jobs = [{
             "event_id": target, "business_version": "1",

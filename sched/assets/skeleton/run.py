@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-_SCHED_SRC = os.environ.get("SCHED_SRC", "/mnt/data01/projects/scheduler")
+_SCHED_SRC = os.environ.get("SCHED_SRC", "")
 if _SCHED_SRC and os.path.isdir(_SCHED_SRC) and _SCHED_SRC not in sys.path:
     sys.path.insert(0, _SCHED_SRC)
 
@@ -25,8 +25,11 @@ class MyExecutor(ExecutorTask):
                 continue
             # 业务处理（幂等）...
             done.append(i)
-            self.checkpoint(done)           # 落断点 + 查暂停
-            self.report_progress(len(done), True, "process", work_units=len(done))
+            # 落断点 + 查暂停；业务版本与进度一并写入检查点（设计第七节）
+            self.checkpoint(done, business_version="1",
+                            progress={"completed": len(done)})
+            self.report_progress(len(done), len(done) < total, "process",
+                                 work_units=len(done))
         self.complete({"count": len(done)})  # 提交完成记录
 
 

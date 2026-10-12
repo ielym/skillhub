@@ -12,10 +12,10 @@
 git clone <scheduler repo>
 cd scheduler
 pip install -e .
-python3 -m sched list          # 应为 sched (v3)
+python3 -m sched version       # 应输出 sched 3.0.0 (protocol v3)
 ```
 
-CLI（Node 薄封装 `sched`）定位代码仓；或直接用 `python3 -m sched`。
+CLI 入口：安装后 `sched`（`pyproject.toml` 的 `[project.scripts]`），或直接用 `python3 -m sched`。
 
 ## 启动
 
@@ -24,7 +24,7 @@ python3 -m sched serve         # 前台常驻；systemd 可直接托管
 ```
 
 - 单实例：`runtime/scheduler.lock` flock 保证只允许一个执行调度实例。
-- SIGTERM/SIGINT 优雅停机：撤执行进程树（先协作暂停再强杀）、停生产者、关库、释放锁。
+- SIGTERM/SIGINT 优雅停机：撤执行进程树（先协作暂停再强杀）、关库、释放锁；**生产者保持运行**（不因调度器退出被回收）。
 - 仅重启调度器默认保持生产者运行；显式整套服务关闭由外部生命周期管理（如 systemd stop），关闭过程依赖生产者持久化进度与事件源回放。
 
 ## systemd 示例

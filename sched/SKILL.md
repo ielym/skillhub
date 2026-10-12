@@ -53,7 +53,8 @@ sched task enable <id>      # 启用任务（写 task.json enabled=true）
 sched task disable <id>     # 禁用任务
 sched job list [task]       # 作业清单
 sched job show <job_id>     # 作业详情 + attempts
-sched job cancel <job_id>   # 显式取消（运行中先撤进程树）
+sched job cancel <job_id>   # 显式取消（serve 在线走命令通道，离线直连撤进程树）
+sched job requeue <job_id>  # 显式重排：关闭在途 attempt 并重新排队（运行中拒绝）
 sched attempt list [job]    # attempt 清单
 sched attempt cancel <id>   # 显式取消单个 attempt
 ```

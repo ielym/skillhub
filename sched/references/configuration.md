@@ -2,7 +2,7 @@
 
 ## 代码根发现
 
-CLI 按顺序发现代码根：`SCHED_REPO` → `SCHED_HOME` → 当前目录及各级父目录 → `~/scheduler` → 已安装 `sched` 包。
+CLI 通过环境变量 `SCHED_HOME` 指定代码根；未设置时默认 sched 包上一级目录（`sched/config.py` 所在包的父目录）。
 
 ## 数据布局（SCHED_HOME，默认 sched 包父目录）
 
@@ -19,6 +19,9 @@ SCHED_HOME/
 └── runtime/
     ├── exec.db                      # SQLite 执行库（jobs/attempts/events/checkpoints/receipts/task_state）
     ├── scheduler.lock               # 单实例 flock
+    ├── snapshot.json                # serve 每轮写入的运行时快照（CLI status 优先读取）
+    ├── commands.jsonl               # CLI → serve 控制命令通道（cancel 等）
+    ├── commands_ack.jsonl           # serve 对控制命令的回执
     ├── archive/<task_id>/           # 已接收请求归档
     ├── isolation/<task_id>/         # 异常请求隔离（相同 job_id 内容不同）
     ├── runs/<attempt_id>/           # 事件 events.jsonl / 控制 control.json / 检查点 checkpoint.json
@@ -46,9 +49,24 @@ SCHED_HOME/
     "shortage_retry_base_sec": 5.0,     // 不足重试指数退避起点
     "shortage_retry_cap_sec": 900.0,
     "protect_deadline_sec": 300.0,      // 整轮保护截止初值
-    "protect_round_backoff_sec": 60.0,  // 失败保护轮间等待
+    "protect_round_backoff_sec": 60.0,  // 失败保护轮间等待（起点）
+    "protect_round_backoff_cap_sec": 600.0,  // 失败保护轮间等待上限（逐渐增加）
+    "yield_observe_sec": 10.0,          // 保护轮每次退让后需观察的间隔
     "slow_confidence_sec": 120.0,       // 变慢判定连续证据窗口
-    "recovery_probe_sec": 60.0
+    "recovery_probe_sec": 60.0,         // 恢复探测最小机会间隔
+    "scan_batch_size": 200,             // 每任务每轮接收时间片（文件数上限）
+    "heartbeat_stale_sec": 30.0,        // 心跳过期阈值下限（与承诺反馈间隔×倍数取较大者）
+    "heartbeat_stale_multiplier": 6.0,  // 心跳过期 = 承诺反馈间隔 × 该倍数
+    "starting_timeout_sec": 60.0,       // STARTING 无 started 事件超时
+    "resource_unhealthy_ratio": 0.9,    // 持续超过判定不健康
+    "resource_healthy_ratio": 0.8,      // 持续低于判定恢复健康（滞回）
+    "resource_stable_samples": 3,       // 滞回连续样本数
+    "mem_growth_ratio": 0.05,           // 单采样区间执行内存净增占容量比例，判"快速增长"
+    "observability_slow_factor": 3.0,   // 观测不足时扩容观察期放大倍数
+    "recover_grace_sec": 30.0,          // 重启后旧执行进程协作退出宽限
+    "cmd_ack_wait_sec": 6.0,            // CLI 控制命令等待确认超时
+    "heartbeat_resume_cooldown_sec": 60.0,  // 心跳过期暂停的作业恢复排队前冷却，防卡死循环
+    "cleanup_terminal_after_sec": 604800.0  // 已完结作业（成功/取消）attempt 工件保留时长（秒）
   }
 }
 ```
@@ -60,15 +78,16 @@ SCHED_HOME/
 | 命令 | 说明 |
 | --- | --- |
 | `sched serve` | 常驻调度循环（前台；SIGTERM/SIGINT 优雅停机） |
-| `sched status [--json]` | 全局状态（生产者 / 动态目标 / 存活 attempt / 队列 / 退让 / 保护对象） |
+| `sched status [--json]` | 全局状态（生产者 / 动态目标 / 存活 attempt / 队列 / 退让 / 保护对象）；serve 在线时读运行时快照显示 `serve=alive` |
 | `sched list [--json]` | 已加载任务 |
 | `sched task validate <id>` | 校验 task.json（schema + 入口存在 + 任务目录内） |
 | `sched task enable/disable <id>` | 写 task.json `enabled` |
 | `sched job list [task]` | 作业清单（最近 N 条） |
 | `sched job show <job_id>` | 作业 + attempts |
-| `sched job cancel <job_id>` | 显式取消（运行中先撤进程树） |
+| `sched job cancel <job_id> [--reason <r>]` | 显式取消（serve 在线走命令通道并等回执；离线降级直连撤进程树） |
+| `sched job requeue <job_id> [--reason <r>]` | 显式重排：关闭在途/退避/阻塞 attempt 并重新排队（STARTING/RUNNING/PAUSING 拒绝）；RECOVERY_BLOCKED 人工解除入口 |
 | `sched attempt list [job]` | attempt 清单 |
-| `sched attempt cancel <id>` | 显式取消单个 attempt |
+| `sched attempt cancel <id> [--reason <r>]` | 显式取消单个 attempt |
 
 **没有 `run` 子命令** —— 正式执行只能由调度器扫描 outbox 就绪 JSON 触发。
 

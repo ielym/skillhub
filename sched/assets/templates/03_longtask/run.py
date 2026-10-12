@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 
-_SCHED_SRC = os.environ.get("SCHED_SRC", "/mnt/data01/projects/scheduler")
+_SCHED_SRC = os.environ.get("SCHED_SRC", "")
 if _SCHED_SRC and os.path.isdir(_SCHED_SRC) and _SCHED_SRC not in sys.path:
     sys.path.insert(0, _SCHED_SRC)
 
@@ -26,13 +25,16 @@ class LongExecutor(ExecutorTask):
             if not items:
                 # 正常无输入等待 ≠ 变慢；报进展但无在途工作
                 self.report_progress(done, False, "idle")
-                self.checkpoint({"count": done})
-                time.sleep(2.0)
+                self.checkpoint({"count": done}, business_version="1",
+                                progress={"count": done})
+                # 可中断等待：暂停信号到达时立即跳出，而非最多再睡满 2s
+                self.wait_interruptible(2.0)
                 continue
             for it in items:
                 self._process(it)          # 幂等
                 done += 1
-                self.checkpoint({"count": done})
+                self.checkpoint({"count": done}, business_version="1",
+                                progress={"count": done})
                 self.report_progress(done, True, "process", work_units=done)
 
     def _poll(self):
