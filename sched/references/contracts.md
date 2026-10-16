@@ -29,11 +29,14 @@
 | `executor_entry` | 执行入口；命令通过参数数组直接启动，不默认经 shell 解释 |
 | `workdir` | 工作目录（相对任务目录） |
 | `progress_semver` | 进展指标语义版本（业务进展语义版本号） |
-| `feedback_interval_sec` | 可选。业务反馈间隔承诺（心跳/进展周期，秒）。用于推导心跳过期阈值与暂停宽限 |
+| `feedback_interval_sec` | 可选。业务反馈间隔承诺（心跳/进展周期，秒）。用于推导心跳过期阈值、暂停宽限与扩容/变慢观察期 |
 | `max_step_sec` | 可选。单个有界步骤的最长时长（秒）。用于推导暂停宽限上限 |
+| `job_priority_cap` | 可选。作业级优先级授权上限（≤ 任务优先级，只能收窄）；缺省 = 任务优先级。作业 priority 超出被钳制到该上限 |
 | `recovery` | 生产者恢复方式说明（数据源如何重放、保留多久、如何识别遗漏） |
 
-优先级：数字越大越优先。作业默认继承所属任务优先级；业务可在任务授权范围内设置作业级优先级，避免执行程序自行改变全局优先级。
+入口对象（`producer_entry`/`executor_entry`）统一支持可选 `cwd` 字段：入口工作目录（相对任务目录，必须落在任务目录内；缺省 `.`；就绪请求的 `workdir` 在此基础上再解析）。
+
+优先级：数字越大越优先。作业默认继承所属任务优先级；业务可在任务授权范围内（`job_priority_cap`，缺省即任务优先级）设置作业级优先级，避免执行程序自行改变全局优先级。
 
 ## 2. 就绪 JSON（outbox）
 
@@ -58,9 +61,10 @@
 | `job_id` | 唯一作业标识：由 `job_id_of(task_id, 事件标识, 业务版本)` 确定（SDK 提供）。相同事件重放得到相同 job_id |
 | `entry_args` | 入口参数数组（追加到 executor_entry.args 之后） |
 | `input_refs` | 必要业务输入引用（如配置文件相对路径） |
-| `idempotency_key` | 稳定幂等键 |
-| `priority` | 可选。作业级优先级（数字越大越优先），但**不得高于任务优先级**（超出被钳制到任务优先级，避免执行程序自行改变全局优先级）；未提供时继承任务优先级 |
-| `env` | 安全业务环境参数（**不含**外部资源清单/账号/凭证/资源申请） |
+| `idempotency_key` | 稳定幂等键（**必填非空**：缺失/空串的请求按无效载荷隔离；SDK 对未显式提供的 spec 以稳定事件标识兜底） |
+| `schema_version` | 协议版本（**必填**：缺失的请求按无效载荷隔离） |
+| `priority` | 可选。作业级优先级（数字越大越优先），但**不得高于任务授权上限**（`job_priority_cap`，缺省=任务优先级；超出被钳制，避免执行程序自行改变全局优先级）；未提供时继承任务优先级 |
+| `env` | 安全业务环境参数（**不含**外部资源清单/账号/凭证/资源申请；接收端对疑似凭证键名告警） |
 
 **不携带**外部资源清单，**不携带** CPU/内存/IO 资源申请，**不携带**最大运行/排队数量。
 
@@ -85,7 +89,7 @@ worker 把事件以 JSON 行追加到 `SCHED_EVENT_FILE`（`runtime/runs/<attemp
 - 心跳说明存活，进展说明推进，**两者分开**。
 - 进展必须给单调递增已完成单元数 + 当前未完成工作是否存在 + 业务处理阶段 + 指标语义版本；可另给有效处理耗时/在途时长/工作量计数。
 - 等待新输入、业务自行等待、正在处理但没有推进必须区分。
-- 业务允许内部重试，但每次外部不足都应及时报 `external_shortage`，不能吞掉失败只发心跳。
+- **资源错误有限重试纪律（R3/R9）**：单次外部操作（一次请求/一次 CLI 调用）失败后原地重试最多 2 次（固定短间隔 3s，重试落日志，仅过滤瞬时抖动），仍失败立即把错误连同错误类型与资源标识一起上浮（`external_shortage` + exit 75），由调度器统一决定退避与并发调整。重试上限与间隔为固定常量，禁止无界/递增重试；禁止兜底、降级、跳过等吞掉行为。
 
 ## 4. 退出码
 
@@ -96,9 +100,9 @@ worker 把事件以 JSON 行追加到 `SCHED_EVENT_FILE`（`runtime/runs/<attemp
 | 其他非 0 | 业务/未知失败 | FAILED（可见回执，不静默删除） |
 
 - 退出 0 但无完成记录 → RECOVERING（待核实，不重复启动）。
-- 统一不足事件与随后 75 属于同一失败轮次，不重复收缩。
+- 统一不足事件与随后 75 属于同一失败轮次，任务退避只步降一次。
 - 业务逻辑错误**不得**冒充统一不足；永久外部失败若也统一报不足，调度器保持可见并降低探测频率，不因固定重试次数放弃。
-- **reason 纯净性**：不足/退出原因只描述状态（如"检索失败（外部资源暂不可得）"），不携带 URL、HTTP 状态码、异常类名等外部资源指纹；SDK 会对 reason 二次净化并截断，但业务源头应直接给纯文案。
+- **reason 归因信息**：不足/退出原因必须携带错误类型（异常类名/HTTP 状态码）与资源标识（URL/主机），供调度器与运维归因；SDK 只做不可见字符清理、空白压缩与长度截断（300 字符），不剥除错误指纹。凭证/账号类敏感信息禁止写入。
 - **启动许可门**：worker 发 `started` 后须等待 `SCHED_PERMIT_FILE`（`runtime/runs/<attempt_id>/permit.json`，含匹配的 attempt_id）才产生业务副作用；等待被中断或超时按统一外部不足（75）退让，不误判业务失败。
 - **显式完成**：`execute()` 正常返回不等于完成——必须显式 `complete()` 提交完成记录；退出 0 无完成记录由调度器按"待核实"处理。
 
@@ -164,10 +168,15 @@ class MyProducer(Producer):
         ...
         return new_cursor, [{"event_id": ..., "business_version": "1",
                              "input_refs": [...], "idempotency_key": ...,
-                             "env": {...}, "entry_args": [...]}]
-
+                             "env": {...}, "entry_args": [...],
+                             "subdir": "2026/10"}]   # 可选：outbox 分目录
+                                                      #（大规模任务，设计第二节）
 run_producer(MyProducer(), tick_sec=300)
 ```
+
+- `idempotency_key` 未显式提供时，SDK 以稳定事件标识兜底（同一事件重放得到同一键），保证全链路非空。
+- `subdir`（可选）指定 outbox 内的相对子目录（不得含 `..`/绝对路径）；正式 JSON 仍是纯协议载荷（分目录信息不进入请求本体），接收端递归扫描分目录。
+- 持续不足退出（`report_shortage` → exit 75）前，SDK 会把已有断点数据按本 attempt 身份重提交一次（设计第六节 L101）。
 
 ## 8. 执行者 SDK（`ExecutorTask`）
 
@@ -195,4 +204,4 @@ run_task(MyExecutor())
 - `self.complete(record)`：提交完成记录（发 `completed` 事件）。
 - `self.resume_data()`：读最近检查点的业务数据。跨 attempt 有效：重试/暂停恢复/重启重放产生新 attempt 时，调度器会先把该作业最近一次已提交检查点复制进新 run_dir，再拉起进程，故断点不丢。
 
-注入环境变量：`SCHED_ATTEMPT_ID / SCHED_JOB_ID / SCHED_TASK_ID / SCHED_TOKEN / SCHED_RUN_DIR / SCHED_EVENT_FILE / SCHED_CONTROL_FILE / SCHED_CHECKPOINT_FILE / SCHED_WORKSPACE / SCHED_PROGRESS_SEMVER`。
+注入环境变量：`SCHED_ATTEMPT_ID / SCHED_JOB_ID / SCHED_TASK_ID / SCHED_TOKEN / SCHED_RUN_DIR / SCHED_EVENT_FILE / SCHED_CONTROL_FILE / SCHED_CHECKPOINT_FILE / SCHED_PERMIT_FILE / SCHED_WORKSPACE / SCHED_PROGRESS_SEMVER`。

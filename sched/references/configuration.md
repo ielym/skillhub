@@ -2,7 +2,15 @@
 
 ## 代码根发现
 
-CLI 通过环境变量 `SCHED_HOME` 指定代码根；未设置时默认 sched 包上一级目录（`sched/config.py` 所在包的父目录）。
+`sched` 命令按以下顺序定位 scheduler 代码仓（需要同时包含 `sched/` 与 `sched_task_sdk/` 两个包）：
+
+1. 环境变量 `SCHED_REPO`（显式指定代码仓根）
+2. 环境变量 `SCHED_HOME`（调度器项目根，与代码仓根同构）
+3. 当前工作目录及其各级父目录（在仓库内任意位置调用均可）
+4. `~/scheduler`（约定的 clone 位置）
+5. 已安装到解释器环境的 sched 包（`pip install -e <代码仓>`）
+
+运行时（serve/任务进程）的 SCHED_HOME 未设置时默认 sched 包上一级目录。
 
 ## 数据布局（SCHED_HOME，默认 sched 包父目录）
 
@@ -17,7 +25,7 @@ SCHED_HOME/
 │   ├── outbox/<job_id>.json         # 已就绪作业 JSON
 │   └── receipts/<job_id>.json       # 调度器接收回执
 └── runtime/
-    ├── exec.db                      # SQLite 执行库（jobs/attempts/events/checkpoints/receipts/task_state）
+    ├── exec.db                      # SQLite 执行库（jobs/attempts/events/checkpoints/task_state）
     ├── scheduler.lock               # 单实例 flock
     ├── snapshot.json                # serve 每轮写入的运行时快照（CLI status 优先读取）
     ├── commands.jsonl               # CLI → serve 控制命令通道（cancel 等）
@@ -59,13 +67,16 @@ SCHED_HOME/
     "heartbeat_stale_multiplier": 6.0,  // 心跳过期 = 承诺反馈间隔 × 该倍数
     "starting_timeout_sec": 60.0,       // STARTING 无 started 事件超时
     "resource_unhealthy_ratio": 0.9,    // 持续超过判定不健康
-    "resource_healthy_ratio": 0.8,      // 持续低于判定恢复健康（滞回）
+    "resource_healthy_ratio": 0.7,      // 持续低于判定恢复健康（滞回）
     "resource_stable_samples": 3,       // 滞回连续样本数
+    "exec_mem_cap_ratio": 0.80,         // 执行内存占机器 ≥ 此值即 SHED（停新增+撤内存，单采样）
     "mem_growth_ratio": 0.05,           // 单采样区间执行内存净增占容量比例，判"快速增长"
     "observability_slow_factor": 3.0,   // 观测不足时扩容观察期放大倍数
+    "task_backoff_probe_base_sec": 30.0,   // 任务全退避（EMPTY）后的首次探测间隔
+    "task_backoff_probe_cap_sec": 600.0,   // 探测间隔上限（每失败一次翻倍递增）
     "recover_grace_sec": 30.0,          // 重启后旧执行进程协作退出宽限
     "cmd_ack_wait_sec": 6.0,            // CLI 控制命令等待确认超时
-    "heartbeat_resume_cooldown_sec": 60.0,  // 心跳过期暂停的作业恢复排队前冷却，防卡死循环
+    "heartbeat_resume_cooldown_sec": 60.0,  // 心跳过期/OOM/内存增长退让/保护自收缩暂停的作业恢复排队前冷却，防紧密重启循环
     "cleanup_terminal_after_sec": 604800.0  // 已完结作业（成功/取消）attempt 工件保留时长（秒）
   }
 }
@@ -98,7 +109,7 @@ SCHED_HOME/
 ```
 SCHED_ATTEMPT_ID / SCHED_JOB_ID / SCHED_TASK_ID / SCHED_TOKEN
 SCHED_RUN_DIR / SCHED_EVENT_FILE / SCHED_CONTROL_FILE / SCHED_CHECKPOINT_FILE
-SCHED_WORKSPACE / SCHED_PROGRESS_SEMVER
+SCHED_PERMIT_FILE / SCHED_WORKSPACE / SCHED_PROGRESS_SEMVER
 ```
 
 执行身份 = PID + 进程启动时间 + attempt_id + 执行令牌 + cgroup/进程树归属，PID 复用不会误暂停其他进程。

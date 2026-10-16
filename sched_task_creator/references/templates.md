@@ -4,10 +4,10 @@
 
 | 模板 | 场景 | 文件 |
 | --- | --- | --- |
-| skeleton | 最小生产者 + 执行者骨架 | [assets/skeleton](assets/skeleton) |
-| 01_daily_producer | 每日定时发现（如每日抓取 T-2） | [assets/templates/01_daily_producer](assets/templates/01_daily_producer) |
-| 02_batch_backfill | 批量回溯（有限日期/ID 范围，幂等跳过已完成） | [assets/templates/02_batch_backfill](assets/templates/02_batch_backfill) |
-| 03_longtask | 长期任务（持续进展，无完成事件参与调度） | [assets/templates/03_longtask](assets/templates/03_longtask) |
+| skeleton | 最小生产者 + 执行者骨架 | [assets/skeleton](../assets/skeleton) |
+| 01_daily_producer | 每日定时发现（如每日抓取 T-2） | [assets/templates/01_daily_producer](../assets/templates/01_daily_producer) |
+| 02_batch_backfill | 批量回溯（有限日期/ID 范围，幂等跳过已完成） | [assets/templates/02_batch_backfill](../assets/templates/02_batch_backfill) |
+| 03_longtask | 长期任务（持续进展，无完成事件参与调度） | [assets/templates/03_longtask](../assets/templates/03_longtask) |
 
 每个模板含 `task.json`、`config.json`（可选）、`producer.py`、`run.py`，自包含（不含外部依赖）。
 

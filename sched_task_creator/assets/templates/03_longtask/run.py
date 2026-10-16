@@ -23,10 +23,10 @@ class LongExecutor(ExecutorTask):
         while True:
             items = self._poll()          # 业务：等待/获取新输入（有界等待）
             if not items:
-                # 正常无输入等待 ≠ 变慢；报进展但无在途工作
+                # 正常无输入等待 ≠ 变慢；报进展但无在途工作。
+                # 检查点只在真实进展后提交：无变化的数据重复落盘会伪造
+                # "外部已恢复"证据，污染调度器的退避判定
                 self.report_progress(done, False, "idle")
-                self.checkpoint({"count": done}, business_version="1",
-                                progress={"count": done})
                 # 可中断等待：暂停信号到达时立即跳出，而非最多再睡满 2s
                 self.wait_interruptible(2.0)
                 continue
