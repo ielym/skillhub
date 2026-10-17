@@ -129,7 +129,7 @@ worker 确认后：停止新工作 → 让当前有界步骤结束或安全取�
 
 ## 6. 检查点
 
-worker 周期提交检查点（不只在收到暂停时）。检查点原子写入 `SCHED_CHECKPOINT_FILE`：
+worker 若选择使用断点，可周期提交检查点（不只在收到暂停时）。检查点原子写入 `SCHED_CHECKPOINT_FILE`：
 
 ```json
 { "format_version": 1, "input_ref": "<job_id>", "business_version": "1",
@@ -202,7 +202,6 @@ run_task(MyExecutor())
 
 - `self.checkpoint(data)`：原子提交检查点（写 checkpoint.json）+ 检查暂停（收到则抛 `PauseRequested`）。
 - `self.report_progress(completed_units)`：发进展事件。
-- `self.report_error_event(reason)`：发 `error` 事件（错误类型 + 资源标识）。
 - `self.report_shortage(reason)`：资源不足 → 抛 `Shortage` → exit 75。
 - `self.complete(record)`：提交完成记录（发 `done` 事件）。
 - `self.resume_data()`：读最近检查点的业务数据。跨 attempt 有效：重试/暂停恢复/重启重放产生新 attempt 时，调度器会先把该作业最近一次已提交检查点复制进新 run_dir，再拉起进程，故断点不丢。

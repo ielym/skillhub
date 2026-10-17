@@ -3,7 +3,7 @@
 - 断点 done_ids + 幂等提交（外部写入前先查存在/用稳定键）。
 - 外部请求纪律：有限重试（R3，最多 2 次 × 固定 3s）——耗尽仍失败立即携带错误类型与资源标识 report_shortage → exit 75。
 - 检查点只在真实进展后提交；异常分支不保存未变化的断点数据。
-- 检索结果为空属于业务事实：复核后直接 complete，不报外部不足。
+- 检索结果为空属于业务事实：复核后直接 complete，不报资源不足。
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ class DailyExecutor(ExecutorTask):
         done = set((self.resume_data() or {}).get("done_ids", []))
 
         # 空结果属于业务事实：复核数次仍为空即按真实无数据处理，
-        # 直接完成——报外部不足会因"确实无数据"而无限退避。
+        # 直接完成——报资源不足会因"确实无数据"而无限退避。
         if not items:
             for i in range(3):
                 _log(f"  结果为空，复核 {i + 1}/3（60s 间隔）")

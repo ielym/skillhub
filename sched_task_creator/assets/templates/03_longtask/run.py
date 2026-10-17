@@ -1,7 +1,6 @@
 """长期任务执行者模板：持续进展、无完成事件，通过进展参与调度观测。
 
 - 周期 checkpoint + 进展；有界步骤边界检查暂停。
-- 等待新输入与正在处理用 stage 区分。
 """
 from __future__ import annotations
 

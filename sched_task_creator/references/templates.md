@@ -53,7 +53,7 @@ class MyExecutor(ExecutorTask):
             # 业务处理（幂等）...
             done.append(i)
             self.checkpoint(done)                              # 落断点 + 查暂停
-            self.report_progress(len(done), stage="process")
+            self.report_progress(len(done))
         self.complete({"count": len(done)})
 
 run_task(MyExecutor())

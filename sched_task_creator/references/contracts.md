@@ -117,7 +117,7 @@ worker 把事件以 JSON 行追加到 `SCHED_EVENT_FILE`（`runtime/runs/<attemp
   "token": "...", "reason": "高优先级保护退让", "deadline": "ISO" }
 ```
 
-worker 确认后：停止新工作 → 让当前有界步骤结束或安全取消 → **原子提交检查点（checkpoint.json）** → 发 `ack` 事件 → 正常退出。调度器由自身发起的 PAUSING 意图识别为 PAUSED，不依赖特殊退出码，也**不默认用 SIGSTOP**。
+worker 确认后：停止新工作 → 让当前有界步骤结束或安全取消 → **保存断点（若有）** → 发 `ack` 事件 → 正常退出。调度器由自身发起的 PAUSING 意图识别为 PAUSED，不依赖特殊退出码，也**不默认用 SIGSTOP**。
 
 - 暂停命令**自带目标 attempt 身份**（`attempt_id`/`token`）：worker 校验与本进程注入身份一致才确认；不一致（调度器已换发新 attempt、控制文件是残留旧命令）一律忽略，防止旧命令误杀新 attempt。
 - 本 attempt 继承了上一 attempt 的检查点但尚未自己提交过时，确认暂停前先把继承数据按本 attempt 身份重提交一次（否则检查点挂在旧 attempt 名下，恢复后会从零重放）。
@@ -129,7 +129,7 @@ worker 确认后：停止新工作 → 让当前有界步骤结束或安全取�
 
 ## 6. 检查点
 
-worker 周期提交检查点（不只在收到暂停时）。检查点原子写入 `SCHED_CHECKPOINT_FILE`：
+worker 若选择使用断点，可周期提交检查点（不只在收到暂停时）。检查点原子写入 `SCHED_CHECKPOINT_FILE`：
 
 ```json
 { "format_version": 1, "input_ref": "<job_id>", "business_version": "1",
@@ -202,7 +202,6 @@ run_task(MyExecutor())
 
 - `self.checkpoint(data)`：原子提交检查点（写 checkpoint.json）+ 检查暂停（收到则抛 `PauseRequested`）。
 - `self.report_progress(completed_units)`：发进展事件。
-- `self.report_error_event(reason)`：发 `error` 事件（错误类型 + 资源标识）。
 - `self.report_shortage(reason)`：资源不足 → 抛 `Shortage` → exit 75。
 - `self.complete(record)`：提交完成记录（发 `done` 事件）。
 - `self.resume_data()`：读最近检查点的业务数据。跨 attempt 有效：重试/暂停恢复/重启重放产生新 attempt 时，调度器会先把该作业最近一次已提交检查点复制进新 run_dir，再拉起进程，故断点不丢。
