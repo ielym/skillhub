@@ -1,7 +1,7 @@
 """长期任务执行者模板：持续进展、无完成事件，通过进展参与调度观测。
 
 - 周期 checkpoint + 进展；有界步骤边界检查暂停。
-- 等待新输入（无在途工作）与正在处理须在进展里区分（has_unfinished）。
+- 等待新输入与正在处理用 stage 区分。
 """
 from __future__ import annotations
 
@@ -16,8 +16,7 @@ from sched_task_sdk import ExecutorTask, run_task  # noqa: E402
 
 
 class LongExecutor(ExecutorTask):
-    heartbeat_interval_sec = 5.0
-
+    
     def execute(self):
         done = (self.resume_data() or {}).get("count", 0)
         while True:
@@ -26,7 +25,7 @@ class LongExecutor(ExecutorTask):
                 # 正常无输入等待 ≠ 变慢；报进展但无在途工作。
                 # 检查点只在真实进展后提交：无变化的数据重复落盘会伪造
                 # "外部已恢复"证据，污染调度器的退避判定
-                self.report_progress(done, False, "idle")
+                self.report_progress(done)
                 # 可中断等待：暂停信号到达时立即跳出，而非最多再睡满 2s
                 self.wait_interruptible(2.0)
                 continue
@@ -35,7 +34,7 @@ class LongExecutor(ExecutorTask):
                 done += 1
                 self.checkpoint({"count": done}, business_version="1",
                                 progress={"count": done})
-                self.report_progress(done, True, "process", work_units=done)
+                self.report_progress(done)
 
     def _poll(self):
         # 业务：返回待处理单元

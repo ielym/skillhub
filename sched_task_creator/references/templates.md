@@ -19,7 +19,7 @@
 { "schema_version": 1, "task_id": "my_task", "enabled": true, "priority": 50,
   "producer_entry": { "file": "producer.py", "interpreter": "python3", "args": [] },
   "executor_entry": { "file": "run.py", "interpreter": "python3", "args": [] },
-  "workdir": ".", "progress_semver": "1.0.0",
+  "workdir": ".",
   "recovery": { "replay": "outbox", "retain": "说明数据源保留", "replay_note": "说明遗漏识别" } }
 ```
 
@@ -53,7 +53,7 @@ class MyExecutor(ExecutorTask):
             # 业务处理（幂等）...
             done.append(i)
             self.checkpoint(done)                              # 落断点 + 查暂停
-            self.report_progress(len(done), True, "process", work_units=len(done))
+            self.report_progress(len(done), stage="process")
         self.complete({"count": len(done)})
 
 run_task(MyExecutor())

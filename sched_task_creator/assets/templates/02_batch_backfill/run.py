@@ -35,12 +35,12 @@ class UnitExecutor(ExecutorTask):
         if done.get("done"):
             self.complete({"key": key, "skipped": "already_done"})
             return
-        self.report_progress(0, True, "start")
+        self.report_progress(0)
         # 幂等：先查外部完成标记，再处理
         self._process(cfg)
         self.checkpoint({"done": True}, business_version=cfg.get("version") or "1",
                         progress={"done": 1})
-        self.report_progress(1, False, "done", work_units=1)
+        self.report_progress(1)
         self.complete({"key": key, "count": 1})
 
     def _process(self, cfg):

@@ -102,7 +102,7 @@ class DailyExecutor(ExecutorTask):
                                "reason": "检索确认无数据"})
                 return
 
-        self.report_progress(len(done), True, "start", work_units=len(items))
+        self.report_progress(len(done))
         for it in items:
             key = it.key
             if key in done:
@@ -113,8 +113,7 @@ class DailyExecutor(ExecutorTask):
             self.checkpoint({"done_ids": sorted(done)},
                             business_version=cfg.get("version") or date_str or "1",
                             progress={"done": len(done), "total": len(items)})
-            self.report_progress(len(done), len(done) < len(items), "process",
-                                 work_units=len(done))
+            self.report_progress(len(done))
         self.complete({"count": len(done), "date": date_str})
 
     def _fetch_items(self, cfg):

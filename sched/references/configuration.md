@@ -46,7 +46,7 @@ SCHED_HOME/
   "control": {
     "loop_tick_sec": 1.0,               // 主循环 + 事件消费
     "sample_interval_sec": 2.0,         // 执行资源采样
-    "heartbeat_interval_sec": 5.0,      // 心跳初值
+    "heartbeat_interval_sec": 5.0,      // 反馈节奏 TaskTiming EMA 的初始值/下限（不再是任务承诺的心跳周期）
     "producer_restart_base_sec": 1.0,   // 生产者崩溃退避起点
     "producer_restart_cap_sec": 30.0,   // 生产者崩溃退避上限
     "producer_crash_reset_after_sec": 300.0,
@@ -63,8 +63,8 @@ SCHED_HOME/
     "slow_confidence_sec": 120.0,       // 变慢判定连续证据窗口
     "recovery_probe_sec": 60.0,         // 恢复探测最小机会间隔
     "scan_batch_size": 200,             // 每任务每轮接收时间片（文件数上限）
-    "heartbeat_stale_sec": 30.0,        // 心跳过期阈值下限（与承诺反馈间隔×倍数取较大者）
-    "heartbeat_stale_multiplier": 6.0,  // 心跳过期 = 承诺反馈间隔 × 该倍数
+    "heartbeat_stale_sec": 30.0,        // 事件停滞阈值下限（与自统计反馈节奏×倍数取较大者）
+    "heartbeat_stale_multiplier": 6.0,  // 事件停滞 = 自统计反馈节奏（EMA） × 该倍数
     "starting_timeout_sec": 60.0,       // STARTING 无 started 事件超时
     "resource_unhealthy_ratio": 0.9,    // 持续超过判定不健康
     "resource_healthy_ratio": 0.7,      // 持续低于判定恢复健康（滞回）
@@ -76,13 +76,15 @@ SCHED_HOME/
     "task_backoff_probe_cap_sec": 600.0,   // 探测间隔上限（每失败一次翻倍递增）
     "recover_grace_sec": 30.0,          // 重启后旧执行进程协作退出宽限
     "cmd_ack_wait_sec": 6.0,            // CLI 控制命令等待确认超时
-    "heartbeat_resume_cooldown_sec": 60.0,  // 心跳过期/OOM/内存增长退让/保护自收缩暂停的作业恢复排队前冷却，防紧密重启循环
+    "heartbeat_resume_cooldown_sec": 60.0,  // 事件停滞/OOM/内存增长退让/保护自收缩暂停的作业恢复排队前冷却，防紧密重启循环
     "cleanup_terminal_after_sec": 604800.0  // 已完结作业（成功/取消）attempt 工件保留时长（秒）
   }
 }
 ```
 
 节奏/等待/间隔是**控制节奏**，有初始值并可随运行调整，不是任务容量或资源申请。
+
+> `task.json` 不再接受任务自申报的 `feedback_interval_sec` / `max_step_sec`（以及 `progress_semver`）字段：任务反馈节奏改由调度器从实际事件间隔自统计（TaskTiming EMA 动态更新，`heartbeat_interval_sec` 仅作为该 EMA 的初始值/下限），暂停宽限与变慢观察期都基于自统计节奏推导。
 
 ## CLI
 
@@ -109,7 +111,7 @@ SCHED_HOME/
 ```
 SCHED_ATTEMPT_ID / SCHED_JOB_ID / SCHED_TASK_ID / SCHED_TOKEN
 SCHED_RUN_DIR / SCHED_EVENT_FILE / SCHED_CONTROL_FILE / SCHED_CHECKPOINT_FILE
-SCHED_PERMIT_FILE / SCHED_WORKSPACE / SCHED_PROGRESS_SEMVER
+SCHED_PERMIT_FILE / SCHED_WORKSPACE
 ```
 
 执行身份 = PID + 进程启动时间 + attempt_id + 执行令牌 + cgroup/进程树归属，PID 复用不会误暂停其他进程。

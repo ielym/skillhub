@@ -46,7 +46,7 @@ sched job show <job_id>    # 看作业状态与 attempt
 2. 调度器拉起执行进程 → RUNNING → 进展事件递增。
 3. 有限任务完成 → SUCCEEDED；长期任务持续进展参与观测。
 4. 演练：`sched job cancel` / 高优保护退让，验证 PAUSING→PAUSED 与断点续跑。
-5. 演练：制造外部不足（断网/限流）→ exit 75 → BACKOFF → 恢复后继续。
+5. 演练：制造资源不足（断网/限流）→ exit 75 → BACKOFF → 恢复后继续。
 
 ## 阶段 4 交付验收
 

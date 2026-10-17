@@ -6,6 +6,5 @@
   "producer_entry": { "file": "producer.py", "interpreter": "python3", "args": [] },
   "executor_entry": { "file": "run.py", "interpreter": "python3", "args": [] },
   "workdir": ".",
-  "progress_semver": "1.0.0",
   "recovery": { "replay": "outbox", "retain": "说明数据源保留方式", "replay_note": "说明遗漏识别方式" }
 }

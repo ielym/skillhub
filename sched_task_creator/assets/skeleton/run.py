@@ -28,8 +28,7 @@ class MyExecutor(ExecutorTask):
             # 落断点 + 查暂停；业务版本与进度一并写入检查点（设计第七节）
             self.checkpoint(done, business_version="1",
                             progress={"completed": len(done)})
-            self.report_progress(len(done), len(done) < total, "process",
-                                 work_units=len(done))
+            self.report_progress(len(done))
         self.complete({"count": len(done)})  # 提交完成记录
 
 
