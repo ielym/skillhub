@@ -79,6 +79,7 @@ worker 把事件以 JSON 行追加到 `SCHED_EVENT_FILE`（`runtime/runs/<attemp
 | kind | 含义 | 关键字段 |
 | --- | --- | --- |
 | `started` | 已启动（身份握手） | `name`（可选，纯可观测） |
+| `heartbeat` | 存活信号（SDK 后台周期自动发送，与进展分离） | 无业务字段 |
 | `progress` | 业务推进 | `completed_units`（必填，单调递增） |
 | `error` | 错误（含资源不足） | `reason`（必填：错误类型 + 资源标识） |
 | `done` | 成功完成（含完成记录） | `record`（可选） |
@@ -86,7 +87,7 @@ worker 把事件以 JSON 行追加到 `SCHED_EVENT_FILE`（`runtime/runs/<attemp
 
 - 每行事件自带 `job_id` / `attempt_id` 归属字段（SDK 从注入环境自动携带），脱离 run_dir 也能定位来源。
 
-- 存活改由**调度器自观测**（进程树 + CPU + 事件间隔）。
+- 存活由 worker 周期发送的 `heartbeat` 事件判定（超时 = 心跳间隔 × 丢失倍数，与业务进展解耦，首步/并发/重启均不影响）+ 进程树。
 - 进展必须给单调递增已完成单元数（`completed_units`）；耗时与资源消耗由调度器自统计，任务不预估。
 - 断点是**任务可选实践**：调度器不规定文件名/格式/提交时机/存在性，仅提供 run_dir 空间；若任务写了断点文件，调度器原样透传（便利而非强制），恢复正确性由任务幂等提交兜底。
 - `name` 字段由任务业务在构造执行者时自己命名（如 `ExecutorTask(name=f"arxiv_fetch_{topic}_{date}")`），纯可观测，调度器不消费决策。

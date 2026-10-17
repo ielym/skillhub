@@ -46,7 +46,7 @@ SCHED_HOME/
   "control": {
     "loop_tick_sec": 1.0,               // 主循环 + 事件消费
     "sample_interval_sec": 2.0,         // 执行资源采样
-    "feedback_interval_init_sec": 5.0,      // 反馈节奏 TaskTiming EMA 的初始值/下限（不再是任务承诺的心跳周期）
+    "feedback_interval_init_sec": 5.0,      // 业务进展节奏 EMA 初值（只服务慢检测/暂停宽限/保护窗，不参与存活）
     "producer_restart_base_sec": 1.0,   // 生产者崩溃退避起点
     "producer_restart_cap_sec": 30.0,   // 生产者崩溃退避上限
     "producer_crash_reset_after_sec": 300.0,
@@ -63,9 +63,8 @@ SCHED_HOME/
     "slow_confidence_sec": 120.0,       // 变慢判定连续证据窗口
     "recovery_probe_sec": 60.0,         // 恢复探测最小机会间隔
     "scan_batch_size": 200,             // 每任务每轮接收时间片（文件数上限）
-    "staleness_min_sec": 30.0,        // 事件停滞阈值下限（与自统计反馈节奏×倍数取较大者）
-    "staleness_multiplier": 6.0,  // 事件停滞 = 自统计反馈节奏（EMA） × 该倍数
-    "starting_timeout_sec": 60.0,       // STARTING 无 started 事件超时
+    "heartbeat_interval_sec": 5.0,      // SDK 心跳发送间隔（注入 worker；调度器据此判活）
+    "heartbeat_stale_multiplier": 6.0,  // 心跳超时 = 心跳间隔 × 该倍数（丢失该数量心跳判死）
     "resource_unhealthy_ratio": 0.9,    // 持续超过判定不健康
     "resource_healthy_ratio": 0.7,      // 持续低于判定恢复健康（滞回）
     "resource_stable_samples": 3,       // 滞回连续样本数
@@ -76,7 +75,7 @@ SCHED_HOME/
     "task_backoff_probe_cap_sec": 600.0,   // 探测间隔上限（每失败一次翻倍递增）
     "recover_grace_sec": 30.0,          // 重启后旧执行进程协作退出宽限
     "cmd_ack_wait_sec": 6.0,            // CLI 控制命令等待确认超时
-    "stale_pause_cooldown_sec": 60.0,  // 事件停滞/OOM/内存增长退让/保护自收缩暂停的作业恢复排队前冷却，防紧密重启循环
+    "stale_pause_cooldown_sec": 60.0,  // 心跳超时/OOM/内存增长退让/保护自收缩暂停的作业恢复排队前冷却，防紧密重启循环
     "cleanup_terminal_after_sec": 604800.0  // 已完结作业（成功/取消）attempt 工件保留时长（秒）
   }
 }
